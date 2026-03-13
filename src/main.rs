@@ -1927,6 +1927,23 @@ SETTINGS
 
     ddl_client.query(&ddl).execute().await
         .with_context(|| format!("CREATE TABLE {table}"))?;
+
+    // ── Schema migration: add columns that didn't exist in older table revisions ──
+    // These ALTER TABLE statements are no-ops when the column already exists
+    // (IF NOT EXISTS), so they're safe to run on every startup against every table.
+    let migrations = [
+        format!("ALTER TABLE `{db_part}`.`{tbl_part}` ADD COLUMN IF NOT EXISTS `wazuh_rule_level`  UInt8  DEFAULT 0  CODEC(ZSTD(1))"),
+        format!("ALTER TABLE `{db_part}`.`{tbl_part}` ADD COLUMN IF NOT EXISTS `wazuh_fired_times` UInt32 DEFAULT 0  CODEC(ZSTD(1))"),
+        format!("ALTER TABLE `{db_part}`.`{tbl_part}` ADD COLUMN IF NOT EXISTS `pci_dss`           String DEFAULT '' CODEC(ZSTD(3))"),
+        format!("ALTER TABLE `{db_part}`.`{tbl_part}` ADD COLUMN IF NOT EXISTS `gdpr`              String DEFAULT '' CODEC(ZSTD(3))"),
+        format!("ALTER TABLE `{db_part}`.`{tbl_part}` ADD COLUMN IF NOT EXISTS `hipaa`             String DEFAULT '' CODEC(ZSTD(3))"),
+        format!("ALTER TABLE `{db_part}`.`{tbl_part}` ADD COLUMN IF NOT EXISTS `nist_800_53`       String DEFAULT '' CODEC(ZSTD(3))"),
+    ];
+    for stmt in &migrations {
+        ddl_client.query(stmt).execute().await
+            .with_context(|| format!("migration: {stmt}"))?;
+    }
+
     Ok(())
 }
 
