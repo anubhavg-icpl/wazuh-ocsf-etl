@@ -1,0 +1,745 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_CLICKHOUSE",
+      "label": "ClickHouse",
+      "description": "ClickHouse datasource (grafana-clickhouse-datasource plugin required)",
+      "type": "datasource",
+      "pluginId": "grafana-clickhouse-datasource",
+      "pluginName": "ClickHouse"
+    }
+  ],
+  "__elements": {},
+  "__requires": [
+    {
+      "type": "datasource",
+      "id": "grafana-clickhouse-datasource",
+      "name": "ClickHouse",
+      "version": "4.0.0"
+    },
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "10.0.0"
+    }
+  ],
+  "annotations": { "list": [] },
+  "description": "Wazuh → OCSF 1.7.0 → ClickHouse SOC Dashboard. Agent visibility, Wazuh rule hunting (rule ID / level / groups), MITRE ATT&CK correlation, compliance tags (PCI-DSS / GDPR / HIPAA / NIST), alert search.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "tags": ["wazuh", "ocsf", "soc", "clickhouse", "security"],
+  "time": { "from": "now-24h", "to": "now" },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Wazuh OCSF SOC",
+  "uid": "wazuh-ocsf-soc-v1",
+  "version": 1,
+  "weekStart": "",
+
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "label": "ClickHouse Datasource",
+        "multi": false,
+        "name": "DS_CLICKHOUSE",
+        "options": [],
+        "query": "grafana-clickhouse-datasource",
+        "refresh": 1,
+        "type": "datasource"
+      },
+      {
+        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+        "definition": "SELECT DISTINCT device_name FROM merge('wazuh_ocsf', '^ocsf_.+$') ORDER BY device_name",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Agent / Device",
+        "multi": true,
+        "name": "device_name",
+        "options": [],
+        "query": "SELECT DISTINCT device_name FROM merge('wazuh_ocsf', '^ocsf_.+$') ORDER BY device_name",
+        "refresh": 2,
+        "regex": "",
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+        "definition": "SELECT DISTINCT severity FROM merge('wazuh_ocsf', '^ocsf_.+$') ORDER BY severity",
+        "hide": 0,
+        "includeAll": true,
+        "label": "Severity",
+        "multi": true,
+        "name": "severity",
+        "options": [],
+        "query": "SELECT DISTINCT severity FROM merge('wazuh_ocsf', '^ocsf_.+$') ORDER BY severity",
+        "refresh": 2,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": { "selected": true, "text": "All", "value": "$__all" },
+        "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+        "definition": "SELECT DISTINCT class_name FROM merge('wazuh_ocsf', '^ocsf_.+$') ORDER BY class_name",
+        "hide": 0,
+        "includeAll": true,
+        "label": "OCSF Class",
+        "multi": true,
+        "name": "class_name",
+        "options": [],
+        "query": "SELECT DISTINCT class_name FROM merge('wazuh_ocsf', '^ocsf_.+$') ORDER BY class_name",
+        "refresh": 2,
+        "sort": 1,
+        "type": "query"
+      },
+      {
+        "current": { "selected": true, "text": "0", "value": "0" },
+        "hide": 0,
+        "includeAll": false,
+        "label": "Min Rule Level",
+        "multi": false,
+        "name": "min_level",
+        "options": [
+          { "selected": true,  "text": "0",  "value": "0"  },
+          { "selected": false, "text": "1",  "value": "1"  },
+          { "selected": false, "text": "5",  "value": "5"  },
+          { "selected": false, "text": "7",  "value": "7"  },
+          { "selected": false, "text": "10", "value": "10" },
+          { "selected": false, "text": "12", "value": "12" },
+          { "selected": false, "text": "13", "value": "13" }
+        ],
+        "query": "0,1,5,7,10,12,13",
+        "type": "custom"
+      }
+    ]
+  },
+
+  "panels": [
+
+    {
+      "id": 1,
+      "type": "stat",
+      "title": "Total Events",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "blue" },
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "blue", "value": null }] }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+          "rawSql": "SELECT count() AS \"Total Events\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) AND device_name IN (${device_name:singlequote}) AND severity IN (${severity:singlequote}) AND class_name IN (${class_name:singlequote}) AND wazuh_rule_level >= ${min_level}",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "id": 2,
+      "type": "stat",
+      "title": "Critical (Level 13–15)",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "dark-red" },
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "dark-red", "value": null }] }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+          "rawSql": "SELECT count() AS \"Critical\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) AND wazuh_rule_level >= 13 AND device_name IN (${device_name:singlequote})",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "id": 3,
+      "type": "stat",
+      "title": "High (Level 10–12)",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+      "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "orange" },
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "orange", "value": null }] }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+          "rawSql": "SELECT count() AS \"High\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) AND wazuh_rule_level BETWEEN 10 AND 12 AND device_name IN (${device_name:singlequote})",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "id": 4,
+      "type": "stat",
+      "title": "Unique Agents",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+      "gridPos": { "x": 12, "y": 0, "w": 4, "h": 4 },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "teal" },
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "teal", "value": null }] }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+          "rawSql": "SELECT uniq(device_name) AS \"Agents\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time)",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "id": 5,
+      "type": "stat",
+      "title": "Unique Rules Fired",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+      "gridPos": { "x": 16, "y": 0, "w": 4, "h": 4 },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "fixed", "fixedColor": "purple" },
+          "unit": "short",
+          "thresholds": { "mode": "absolute", "steps": [{ "color": "purple", "value": null }] }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+          "rawSql": "SELECT uniq(finding_uid) AS \"Unique Rules\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) AND device_name IN (${device_name:singlequote}) AND wazuh_rule_level >= ${min_level}",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "id": 6,
+      "type": "stat",
+      "title": "Max Rule Level Active",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+      "gridPos": { "x": 20, "y": 0, "w": 4, "h": 4 },
+      "options": {
+        "reduceOptions": { "values": false, "calcs": ["lastNotNull"], "fields": "" },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": { "mode": "thresholds" },
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              { "color": "green", "value": null },
+              { "color": "yellow", "value": 7 },
+              { "color": "orange", "value": 10 },
+              { "color": "dark-red", "value": 13 }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+          "rawSql": "SELECT max(wazuh_rule_level) AS \"Max Level\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) AND device_name IN (${device_name:singlequote})",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "id": 7,
+      "type": "timeseries",
+      "title": "Events over Time by Severity",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+      "gridPos": { "x": 0, "y": 4, "w": 16, "h": 8 },
+      "options": {
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "bottom", "showLegend": true, "calcs": ["sum", "max"] }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "lineWidth": 2, "fillOpacity": 10, "gradientMode": "none", "spanNulls": false }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Critical"      }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "dark-red"  } }] },
+          { "matcher": { "id": "byName", "options": "High"          }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "orange"    } }] },
+          { "matcher": { "id": "byName", "options": "Medium"        }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "yellow"    } }] },
+          { "matcher": { "id": "byName", "options": "Low"           }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "blue"      } }] },
+          { "matcher": { "id": "byName", "options": "Informational" }, "properties": [{ "id": "color", "value": { "mode": "fixed", "fixedColor": "green"     } }] }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+          "rawSql": "SELECT toStartOfInterval(time, INTERVAL $__interval_s SECOND) AS time, countIf(severity='Critical') AS \"Critical\", countIf(severity='High') AS \"High\", countIf(severity='Medium') AS \"Medium\", countIf(severity='Low') AS \"Low\", countIf(severity='Informational') AS \"Informational\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) AND device_name IN (${device_name:singlequote}) AND class_name IN (${class_name:singlequote}) AND wazuh_rule_level >= ${min_level} GROUP BY time ORDER BY time ASC",
+          "format": 3,
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "id": 8,
+      "type": "piechart",
+      "title": "OCSF Class Distribution",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+      "gridPos": { "x": 16, "y": 4, "w": 8, "h": 8 },
+      "options": {
+        "pieType": "pie",
+        "tooltip": { "mode": "multi", "sort": "desc" },
+        "legend": { "displayMode": "table", "placement": "right", "showLegend": true, "values": ["value", "percent"] },
+        "displayLabels": ["percent"]
+      },
+      "fieldConfig": { "defaults": {}, "overrides": [] },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+          "rawSql": "SELECT class_name AS \"Class\", count() AS \"Events\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) AND device_name IN (${device_name:singlequote}) AND wazuh_rule_level >= ${min_level} GROUP BY class_name ORDER BY Events DESC",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "id": 9,
+      "type": "row",
+      "title": "Agent Visibility",
+      "collapsed": false,
+      "gridPos": { "x": 0, "y": 12, "w": 24, "h": 1 },
+      "panels": []
+    },
+
+    {
+      "id": 10,
+      "type": "barchart",
+      "title": "Events per Agent",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+      "gridPos": { "x": 0, "y": 13, "w": 12, "h": 8 },
+      "options": {
+        "orientation": "horizontal",
+        "barRadius": 0.05,
+        "barWidth": 0.7,
+        "stacking": "none",
+        "showValue": "auto",
+        "fillOpacity": 75,
+        "tooltip": { "mode": "single", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false },
+        "xTickLabelRotation": 0
+      },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "palette-classic" }, "unit": "short" },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+          "rawSql": "SELECT device_name AS \"Agent\", count() AS \"Events\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) AND wazuh_rule_level >= ${min_level} GROUP BY device_name ORDER BY Events DESC LIMIT 20",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "id": 11,
+      "type": "table",
+      "title": "Agent Summary",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+      "gridPos": { "x": 12, "y": 13, "w": 12, "h": 8 },
+      "options": { "footer": { "show": false }, "showHeader": true },
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "auto", "filterable": true } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Max Level" }, "properties": [{ "id": "custom.width", "value": 90 }, { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 7 }, { "color": "orange", "value": 10 }, { "color": "dark-red", "value": 13 }] } }, { "id": "custom.displayMode", "value": "color-background" }] },
+          { "matcher": { "id": "byName", "options": "Last Seen" }, "properties": [{ "id": "unit", "value": "dateTimeFromNow" }] }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+          "rawSql": "SELECT device_name AS \"Agent\", manager_name AS \"Manager\", count() AS \"Events\", max(wazuh_rule_level) AS \"Max Level\", uniq(finding_uid) AS \"Unique Rules\", uniq(class_name) AS \"OCSF Classes\", max(time) AS \"Last Seen\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) GROUP BY device_name, manager_name ORDER BY Events DESC",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "id": 12,
+      "type": "row",
+      "title": "Rule & Threat Hunting",
+      "collapsed": false,
+      "gridPos": { "x": 0, "y": 21, "w": 24, "h": 1 },
+      "panels": []
+    },
+
+    {
+      "id": 13,
+      "type": "table",
+      "title": "Top Wazuh Rules (search by Rule ID or description)",
+      "description": "finding_uid = Wazuh rule ID  |  finding_title = rule description  |  finding_types = rule groups",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+      "gridPos": { "x": 0, "y": 22, "w": 14, "h": 9 },
+      "options": { "footer": { "show": false }, "showHeader": true, "sortBy": [{ "displayName": "Hits", "desc": true }] },
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "auto", "filterable": true } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Rule ID"    }, "properties": [{ "id": "custom.width", "value": 80  }, { "id": "links", "value": [{ "title": "Filter by this rule", "url": "/d/wazuh-ocsf-soc-v1?var-finding_uid=${__value.raw}" }] }] },
+          { "matcher": { "id": "byName", "options": "Max Level"  }, "properties": [{ "id": "custom.width", "value": 90  }, { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 7 }, { "color": "orange", "value": 10 }, { "color": "dark-red", "value": 13 }] } }, { "id": "custom.displayMode", "value": "color-background" }] },
+          { "matcher": { "id": "byName", "options": "Hits"       }, "properties": [{ "id": "custom.width", "value": 70  }] },
+          { "matcher": { "id": "byName", "options": "Agents"     }, "properties": [{ "id": "custom.width", "value": 65  }] },
+          { "matcher": { "id": "byName", "options": "Last Seen"  }, "properties": [{ "id": "unit", "value": "dateTimeFromNow" }, { "id": "custom.width", "value": 110 }] }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+          "rawSql": "SELECT finding_uid AS \"Rule ID\", finding_title AS \"Rule Description\", count() AS \"Hits\", max(wazuh_rule_level) AS \"Max Level\", uniq(device_name) AS \"Agents\", max(wazuh_fired_times) AS \"Max Fired Times\", max(time) AS \"Last Seen\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) AND device_name IN (${device_name:singlequote}) AND severity IN (${severity:singlequote}) AND class_name IN (${class_name:singlequote}) AND wazuh_rule_level >= ${min_level} GROUP BY finding_uid, finding_title ORDER BY Hits DESC LIMIT 25",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "id": 14,
+      "type": "table",
+      "title": "Top Source IPs",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+      "gridPos": { "x": 14, "y": 22, "w": 5, "h": 9 },
+      "options": { "footer": { "show": false }, "showHeader": true },
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "auto", "filterable": true } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Events" }, "properties": [{ "id": "custom.displayMode", "value": "lcd-gauge" }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "red" } }] }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+          "rawSql": "SELECT src_ip AS \"Source IP\", count() AS \"Events\", uniq(device_name) AS \"Targets\", max(wazuh_rule_level) AS \"Max Lvl\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) AND src_ip != '' AND device_name IN (${device_name:singlequote}) AND wazuh_rule_level >= ${min_level} GROUP BY src_ip ORDER BY Events DESC LIMIT 15",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "id": 15,
+      "type": "table",
+      "title": "Top Actors / Users",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+      "gridPos": { "x": 19, "y": 22, "w": 5, "h": 9 },
+      "options": { "footer": { "show": false }, "showHeader": true },
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "auto", "filterable": true } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Events" }, "properties": [{ "id": "custom.displayMode", "value": "lcd-gauge" }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "purple" } }] }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+          "rawSql": "SELECT actor_user AS \"User\", count() AS \"Events\", uniq(device_name) AS \"Agents\", max(wazuh_rule_level) AS \"Max Lvl\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) AND actor_user != '' AND device_name IN (${device_name:singlequote}) AND wazuh_rule_level >= ${min_level} GROUP BY actor_user ORDER BY Events DESC LIMIT 15",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "id": 16,
+      "type": "row",
+      "title": "MITRE ATT&CK",
+      "collapsed": false,
+      "gridPos": { "x": 0, "y": 31, "w": 24, "h": 1 },
+      "panels": []
+    },
+
+    {
+      "id": 17,
+      "type": "barchart",
+      "title": "Top MITRE Tactics",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+      "gridPos": { "x": 0, "y": 32, "w": 10, "h": 8 },
+      "options": {
+        "orientation": "horizontal",
+        "barRadius": 0.05,
+        "barWidth": 0.7,
+        "stacking": "none",
+        "showValue": "auto",
+        "fillOpacity": 75,
+        "tooltip": { "mode": "single", "sort": "none" },
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": false }
+      },
+      "fieldConfig": {
+        "defaults": { "color": { "mode": "fixed", "fixedColor": "dark-red" }, "unit": "short" },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+          "rawSql": "SELECT attack_tactic AS \"Tactic\", count() AS \"Events\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) AND attack_tactic != '' AND device_name IN (${device_name:singlequote}) GROUP BY attack_tactic ORDER BY Events DESC LIMIT 15",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "id": 18,
+      "type": "table",
+      "title": "Top MITRE Techniques",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+      "gridPos": { "x": 10, "y": 32, "w": 14, "h": 8 },
+      "options": { "footer": { "show": false }, "showHeader": true },
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "auto", "filterable": true } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Technique ID" }, "properties": [{ "id": "custom.width", "value": 110 }] },
+          { "matcher": { "id": "byName", "options": "Hits"         }, "properties": [{ "id": "custom.displayMode", "value": "lcd-gauge" }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "dark-red" } }] },
+          { "matcher": { "id": "byName", "options": "Max Level"    }, "properties": [{ "id": "custom.width", "value": 90 }, { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 7 }, { "color": "orange", "value": 10 }, { "color": "dark-red", "value": 13 }] } }, { "id": "custom.displayMode", "value": "color-background" }] }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+          "rawSql": "SELECT attack_id AS \"Technique ID\", attack_technique AS \"Technique\", attack_tactic AS \"Tactic\", count() AS \"Hits\", uniq(device_name) AS \"Agents\", max(wazuh_rule_level) AS \"Max Level\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) AND attack_id != '' AND device_name IN (${device_name:singlequote}) GROUP BY attack_id, attack_technique, attack_tactic ORDER BY Hits DESC LIMIT 20",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "id": 19,
+      "type": "row",
+      "title": "Compliance Coverage",
+      "collapsed": false,
+      "gridPos": { "x": 0, "y": 40, "w": 24, "h": 1 },
+      "panels": []
+    },
+
+    {
+      "id": 20,
+      "type": "table",
+      "title": "PCI DSS",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+      "gridPos": { "x": 0, "y": 41, "w": 6, "h": 8 },
+      "options": { "footer": { "show": false }, "showHeader": true },
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "auto", "filterable": true } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Events" }, "properties": [{ "id": "custom.displayMode", "value": "lcd-gauge" }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "blue" } }] }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+          "rawSql": "SELECT pci_dss AS \"PCI DSS Req\", count() AS \"Events\", uniq(finding_uid) AS \"Rules\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) AND pci_dss != '' AND device_name IN (${device_name:singlequote}) GROUP BY pci_dss ORDER BY Events DESC LIMIT 15",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "id": 21,
+      "type": "table",
+      "title": "GDPR",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+      "gridPos": { "x": 6, "y": 41, "w": 6, "h": 8 },
+      "options": { "footer": { "show": false }, "showHeader": true },
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "auto", "filterable": true } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Events" }, "properties": [{ "id": "custom.displayMode", "value": "lcd-gauge" }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "green" } }] }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+          "rawSql": "SELECT gdpr AS \"GDPR Article\", count() AS \"Events\", uniq(finding_uid) AS \"Rules\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) AND gdpr != '' AND device_name IN (${device_name:singlequote}) GROUP BY gdpr ORDER BY Events DESC LIMIT 15",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "id": 22,
+      "type": "table",
+      "title": "HIPAA",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+      "gridPos": { "x": 12, "y": 41, "w": 6, "h": 8 },
+      "options": { "footer": { "show": false }, "showHeader": true },
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "auto", "filterable": true } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Events" }, "properties": [{ "id": "custom.displayMode", "value": "lcd-gauge" }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "orange" } }] }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+          "rawSql": "SELECT hipaa AS \"HIPAA Section\", count() AS \"Events\", uniq(finding_uid) AS \"Rules\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) AND hipaa != '' AND device_name IN (${device_name:singlequote}) GROUP BY hipaa ORDER BY Events DESC LIMIT 15",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "id": 23,
+      "type": "table",
+      "title": "NIST 800-53",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+      "gridPos": { "x": 18, "y": 41, "w": 6, "h": 8 },
+      "options": { "footer": { "show": false }, "showHeader": true },
+      "fieldConfig": {
+        "defaults": { "custom": { "align": "auto", "filterable": true } },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Events" }, "properties": [{ "id": "custom.displayMode", "value": "lcd-gauge" }, { "id": "color", "value": { "mode": "fixed", "fixedColor": "purple" } }] }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+          "rawSql": "SELECT nist_800_53 AS \"NIST Control\", count() AS \"Events\", uniq(finding_uid) AS \"Rules\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) AND nist_800_53 != '' AND device_name IN (${device_name:singlequote}) GROUP BY nist_800_53 ORDER BY Events DESC LIMIT 15",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+
+    {
+      "id": 24,
+      "type": "row",
+      "title": "Alert Search (full detail, filterable)",
+      "collapsed": false,
+      "gridPos": { "x": 0, "y": 49, "w": 24, "h": 1 },
+      "panels": []
+    },
+
+    {
+      "id": 25,
+      "type": "table",
+      "title": "Recent Alerts — Rule ID / Description / Level / Groups / Decoder / MITRE / User / IP",
+      "description": "All key Wazuh rule fields. Use column filters to hunt. finding_uid = Rule ID. finding_types = rule groups (JSON). decoder_name = parsing decoder.",
+      "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+      "gridPos": { "x": 0, "y": 50, "w": 24, "h": 12 },
+      "options": {
+        "footer": { "show": false },
+        "showHeader": true,
+        "sortBy": [{ "displayName": "Time", "desc": true }]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": { "align": "auto", "filterable": true, "inspect": true }
+        },
+        "overrides": [
+          { "matcher": { "id": "byName", "options": "Time"         }, "properties": [{ "id": "unit", "value": "dateTimeFromNow" }, { "id": "custom.width", "value": 130 }] },
+          { "matcher": { "id": "byName", "options": "Rule ID"      }, "properties": [{ "id": "custom.width", "value": 80  }] },
+          { "matcher": { "id": "byName", "options": "Level"        }, "properties": [{ "id": "custom.width", "value": 55  }, { "id": "thresholds", "value": { "mode": "absolute", "steps": [{ "color": "green", "value": null }, { "color": "yellow", "value": 7 }, { "color": "orange", "value": 10 }, { "color": "dark-red", "value": 13 }] } }, { "id": "custom.displayMode", "value": "color-background" }] },
+          { "matcher": { "id": "byName", "options": "Severity"     }, "properties": [{ "id": "custom.width", "value": 100 }] },
+          { "matcher": { "id": "byName", "options": "Agent"        }, "properties": [{ "id": "custom.width", "value": 100 }] },
+          { "matcher": { "id": "byName", "options": "OCSF Class"   }, "properties": [{ "id": "custom.width", "value": 160 }] },
+          { "matcher": { "id": "byName", "options": "Decoder"      }, "properties": [{ "id": "custom.width", "value": 160 }] },
+          { "matcher": { "id": "byName", "options": "Fired Times"  }, "properties": [{ "id": "custom.width", "value": 90  }] },
+          { "matcher": { "id": "byName", "options": "MITRE ID"     }, "properties": [{ "id": "custom.width", "value": 90  }] },
+          { "matcher": { "id": "byName", "options": "Src IP"       }, "properties": [{ "id": "custom.width", "value": 120 }] }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": { "type": "grafana-clickhouse-datasource", "uid": "${DS_CLICKHOUSE}" },
+          "rawSql": "SELECT time AS \"Time\", device_name AS \"Agent\", finding_uid AS \"Rule ID\", finding_title AS \"Rule Description\", wazuh_rule_level AS \"Level\", severity AS \"Severity\", class_name AS \"OCSF Class\", activity_name AS \"Activity\", decoder_name AS \"Decoder\", finding_types AS \"Rule Groups\", wazuh_fired_times AS \"Fired Times\", actor_user AS \"User\", src_ip AS \"Src IP\", dst_ip AS \"Dst IP\", file_name AS \"File\", attack_id AS \"MITRE ID\", attack_technique AS \"Technique\", attack_tactic AS \"Tactic\", pci_dss AS \"PCI DSS\", gdpr AS \"GDPR\", hipaa AS \"HIPAA\", nist_800_53 AS \"NIST\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) AND device_name IN (${device_name:singlequote}) AND severity IN (${severity:singlequote}) AND class_name IN (${class_name:singlequote}) AND wazuh_rule_level >= ${min_level} ORDER BY time DESC LIMIT 500",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    }
+
+  ]
+}
