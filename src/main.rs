@@ -508,6 +508,175 @@ const STATUS: &[&str] = &[
     "audit.success",   // auditd success field ("yes"/"no" or "1"/"0")
 ];
 
+// ─── Unmapped-field discovery ─────────────────────────────────────────────────
+//
+// At runtime, every field path present in an event's `data.*` sub-object that
+// is NOT covered by any of the static constant arrays above is considered
+// "unmapped" — it will end up in `event_data` (lossless) but won't be promoted
+// to a typed OCSF column.
+//
+// These unmapped paths are accumulated in UNMAPPED_TRACKER and written to
+// `state/unmapped_fields.json` on every flush.  Operators can inspect that
+// file and add missing paths to `config/field_mappings.toml` to get them into
+// typed columns.
+
+/// Union of every field path across all 20 static constant arrays.
+/// Built once at startup via `Lazy`; used to decide whether a runtime path is
+/// already handled.
+static KNOWN_PATHS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
+    let mut s = HashSet::new();
+    for paths in &[
+        SRC_IP, DST_IP, SRC_PORT, DST_PORT,
+        NAT_SRC_IP, NAT_DST_IP, NAT_SRC_PORT, NAT_DST_PORT,
+        PROTOCOL, BYTES_IN, BYTES_OUT,
+        ACTOR_USER, TARGET_USER, DOMAIN, URL,
+        HTTP_METHOD, HTTP_STATUS, APP_NAME,
+        FILE_NAME, PROCESS_NAME, PROCESS_ID,
+        RULE_NAME, CATEGORY,
+        IFACE_IN, IFACE_OUT, SRC_HOSTNAME, DST_HOSTNAME,
+        ACTION, STATUS,
+    ] {
+        for p in *paths { s.insert(*p); }
+    }
+    s
+});
+
+/// Per-field stats accumulated at runtime.
+#[derive(Debug, Default, Clone, serde::Serialize, serde::Deserialize)]
+struct FieldInfo {
+    /// Total occurrences since the binary started (or since last file reset).
+    pub count:   u64,
+    /// One representative value from production data.
+    pub example: String,
+    /// Suggested entry for field_mappings.toml — always present so the user
+    /// can copy-paste directly.
+    pub suggested_toml: String,
+}
+
+/// Global accumulator.  Only the Mutex is held for the very short duration of
+/// a HashMap update; ClickHouse I/O is done outside the lock.
+static UNMAPPED_TRACKER: Lazy<std::sync::Mutex<HashMap<String, FieldInfo>>> =
+    Lazy::new(|| std::sync::Mutex::new(HashMap::new()));
+
+/// Recursively walk `val` and emit every leaf as a dotted path.
+/// `prefix` carries the path built so far (empty string at the root call).
+fn flatten_to_paths(val: &Value, prefix: &str, out: &mut Vec<(String, String)>) {
+    match val {
+        Value::Object(map) => {
+            for (k, v) in map {
+                let path = if prefix.is_empty() {
+                    k.clone()
+                } else {
+                    format!("{prefix}.{k}")
+                };
+                flatten_to_paths(v, &path, out);
+            }
+        }
+        Value::Array(arr) => {
+            // Index each element so the path is unique, e.g. "tags.0".
+            for (i, v) in arr.iter().enumerate() {
+                let path = if prefix.is_empty() {
+                    i.to_string()
+                } else {
+                    format!("{prefix}.{i}")
+                };
+                flatten_to_paths(v, &path, out);
+            }
+        }
+        Value::Null => {}  // nulls carry no information — skip
+        leaf => {
+            if !prefix.is_empty() {
+                out.push((prefix.to_string(), value_to_str(leaf)));
+            }
+        }
+    }
+}
+
+/// Called at the end of `transform()`.  Flattens `data_val`'s dotted paths
+/// and for any path absent from both KNOWN_PATHS and the user's custom
+/// field_map, records it in UNMAPPED_TRACKER so the operator can act on it.
+fn track_unmapped_fields(data_val: &Value, custom: &CustomMappings) {
+    let mut leaves: Vec<(String, String)> = Vec::new();
+    flatten_to_paths(data_val, "", &mut leaves);
+
+    if leaves.is_empty() { return; }
+
+    // Collect custom-mapped field names once.
+    let custom_keys: HashSet<&str> = custom.field_map.keys()
+        .map(|s| s.as_str())
+        .collect();
+
+    let mut guard = match UNMAPPED_TRACKER.lock() {
+        Ok(g)  => g,
+        Err(e) => e.into_inner(),
+    };
+
+    for (path, example) in leaves {
+        // Skip if covered by a static constant or a user custom mapping.
+        if KNOWN_PATHS.contains(path.as_str()) { continue; }
+        if custom_keys.contains(path.as_str()) { continue; }
+
+        let entry = guard.entry(path.clone()).or_insert_with(|| FieldInfo {
+            count:   0,
+            example: example.clone(),
+            suggested_toml: format!(
+                r#"# "{path}" = "src_ip"  # TODO: choose a valid target column"#
+            ),
+        });
+        entry.count += 1;
+        // Keep the most recent example value (overwrite every time so it stays
+        // representative of what is currently flowing through the pipeline).
+        if !example.is_empty() {
+            entry.example = example;
+        }
+    }
+}
+
+/// Serialize UNMAPPED_TRACKER to `path` atomically (write temp → rename).
+/// Called on every successful ClickHouse flush so the file stays fresh.
+fn write_unmapped_report(path: &Path) {
+    let guard = match UNMAPPED_TRACKER.lock() {
+        Ok(g)  => g,
+        Err(e) => e.into_inner(),
+    };
+    if guard.is_empty() { return; }
+
+    // Build a sorted, human-friendly JSON document.
+    let mut fields: Vec<(&String, &FieldInfo)> = guard.iter().collect();
+    fields.sort_by(|a, b| b.1.count.cmp(&a.1.count).then(a.0.cmp(b.0)));
+
+    let fields_map: serde_json::Map<String, Value> = fields.into_iter()
+        .map(|(k, v)| (k.clone(), serde_json::to_value(v).unwrap_or(Value::Null)))
+        .collect();
+
+    let doc = serde_json::json!({
+        "note": "Fields from data.* that are not yet mapped to an OCSF typed column. \
+                 Add entries to config/field_mappings.toml to promote them.",
+        "valid_targets": [
+            "src_ip","dst_ip","src_port","dst_port",
+            "nat_src_ip","nat_dst_ip","nat_src_port","nat_dst_port",
+            "actor_user","target_user","domain","url",
+            "http_method","http_status","app_name","src_hostname","dst_hostname",
+            "file_name","process_name","process_id","rule_name","category",
+            "interface_in","interface_out","bytes_in","bytes_out",
+            "network_protocol","action","status"
+        ],
+        "fields": fields_map,
+    });
+
+    // Atomic write: temp file beside the target, then rename.
+    let tmp = path.with_extension("json.tmp");
+    match std::fs::write(&tmp, serde_json::to_string_pretty(&doc).unwrap_or_default()) {
+        Ok(_) => {
+            if let Err(e) = std::fs::rename(&tmp, path) {
+                warn!("unmapped_fields: rename failed: {e}");
+                let _ = std::fs::remove_file(&tmp);
+            }
+        }
+        Err(e) => warn!("unmapped_fields: write failed: {e}"),
+    }
+}
+
 // ─── App config ─────────────────────────────────────────────────────────────
 
 /// Selects which input source the pipeline reads from.
@@ -549,6 +718,10 @@ struct AppConfig {
     /// ZeroMQ URI to subscribe to when input_mode = ZeroMq.
     /// Must match the <zeromq_uri> in wazuh-manager ossec.conf.
     zeromq_uri: String,
+    /// Where to write the JSON report of unmapped data.* field paths.
+    /// Updated atomically on every successful ClickHouse flush.
+    /// Default: `state/unmapped_fields.json`.
+    unmapped_fields_file: PathBuf,
 }
 
 impl AppConfig {
@@ -602,6 +775,10 @@ impl AppConfig {
             },
             zeromq_uri: std::env::var("ZEROMQ_URI")
                 .unwrap_or_else(|_| "tcp://localhost:11111".into()),
+            unmapped_fields_file: PathBuf::from(
+                std::env::var("UNMAPPED_FIELDS_FILE")
+                    .unwrap_or_else(|_| "state/unmapped_fields.json".into()),
+            ),
         }
     }
 }
@@ -904,6 +1081,9 @@ async fn do_flush(
     if let Err(e) = store.save(&TailState { inode, offset }) {
         warn!("state save: {e:#}");
     }
+    // Write the unmapped-fields discovery report so operators can see what
+    // fields are not yet promoted to typed OCSF columns.
+    write_unmapped_report(&cfg.unmapped_fields_file);
 }
 
 // ─── Custom mappings (field_mappings.toml) ────────────────────────────────────
@@ -1801,6 +1981,11 @@ fn transform(
         "transform ok"
     );
 
+    // ── Unmapped-field discovery ──────────────────────────────────────────
+    // Record any data.* paths not covered by the static constants or custom
+    // mappings.  Zero-cost in the happy path once all fields are known.
+    track_unmapped_fields(&data_val, custom);
+
     Some((table, OcsfRecord {
         time: time_secs,
         time_dt,
@@ -2366,6 +2551,30 @@ async fn main() -> Result<()> {
     info!("  data_ttl_days    : {:?}", cfg.data_ttl_days);
     info!("  ocsf_version     : {}", initial_mappings.ocsf_version);
     info!("  custom_mappings  : {} rule(s)", initial_mappings.field_map.len());
+    info!("  unmapped report  : {}", cfg.unmapped_fields_file.display());
+
+    // If a prior unmapped report exists, surface the top fields so the
+    // operator sees them in the start-up log without having to open a file.
+    if cfg.unmapped_fields_file.exists() {
+        if let Ok(txt) = std::fs::read_to_string(&cfg.unmapped_fields_file) {
+            if let Ok(v) = serde_json::from_str::<Value>(&txt) {
+                if let Some(fields) = v.get("fields").and_then(Value::as_object) {
+                    let mut top: Vec<(u64, &str)> = fields.iter()
+                        .filter_map(|(k, fv)| {
+                            fv.get("count")
+                                .and_then(Value::as_u64)
+                                .map(|c| (c, k.as_str()))
+                        })
+                        .collect();
+                    top.sort_by(|a, b| b.0.cmp(&a.0));
+                    let shown: Vec<&str> = top.iter().take(10).map(|(_, k)| *k).collect();
+                    if !shown.is_empty() {
+                        info!("  top unmapped fields (add to field_mappings.toml): {:?}", shown);
+                    }
+                }
+            }
+        }
+    }
 
     for (old, new_col) in &initial_mappings.ocsf_renames {
         warn!("OCSF rename pending: `{old}` → `{new_col}`. \
@@ -3488,6 +3697,135 @@ ocsf_version = "1.7.0"
         // Literal dotted key for byte counter
         let flat = serde_json::json!({"rcvdbyte": "2048"});
         assert_eq!(first_u64(&flat, &["rcvdbyte"]), 2048u64);
+    }
+
+    // ── flatten_to_paths tests ────────────────────────────────────────────
+
+    #[test]
+    fn flatten_flat_object() {
+        let v = serde_json::json!({"a": "1", "b": "2"});
+        let mut out = vec![];
+        flatten_to_paths(&v, "", &mut out);
+        out.sort();
+        assert_eq!(out, vec![("a".into(), "1".into()), ("b".into(), "2".into())]);
+    }
+
+    #[test]
+    fn flatten_nested_object() {
+        let v = serde_json::json!({"a": {"b": {"c": "deep"}}});
+        let mut out = vec![];
+        flatten_to_paths(&v, "", &mut out);
+        assert_eq!(out, vec![("a.b.c".into(), "deep".into())]);
+    }
+
+    #[test]
+    fn flatten_numeric_leaf() {
+        let v = serde_json::json!({"port": 443});
+        let mut out = vec![];
+        flatten_to_paths(&v, "", &mut out);
+        assert_eq!(out, vec![("port".into(), "443".into())]);
+    }
+
+    #[test]
+    fn flatten_bool_leaf() {
+        let v = serde_json::json!({"enabled": true});
+        let mut out = vec![];
+        flatten_to_paths(&v, "", &mut out);
+        assert_eq!(out, vec![("enabled".into(), "true".into())]);
+    }
+
+    #[test]
+    fn flatten_skips_null() {
+        let v = serde_json::json!({"a": null, "b": "ok"});
+        let mut out = vec![];
+        flatten_to_paths(&v, "", &mut out);
+        assert_eq!(out, vec![("b".into(), "ok".into())]);
+    }
+
+    // ── track_unmapped_fields tests ───────────────────────────────────────
+
+    #[test]
+    fn unmapped_known_path_not_recorded() {
+        // "srcip" is in KNOWN_PATHS — must not appear in the tracker snapshot.
+        let snapshot_before: HashMap<String, FieldInfo> = {
+            let g = UNMAPPED_TRACKER.lock().unwrap();
+            g.clone()
+        };
+        let data = serde_json::json!({"srcip": "1.2.3.4"});
+        track_unmapped_fields(&data, &no_custom());
+        let snapshot_after: HashMap<String, FieldInfo> = {
+            let g = UNMAPPED_TRACKER.lock().unwrap();
+            g.clone()
+        };
+        // "srcip" must not have been added by this call.
+        let new_keys: HashSet<&String> = snapshot_after.keys()
+            .filter(|k| !snapshot_before.contains_key(*k))
+            .collect();
+        assert!(!new_keys.contains(&"srcip".to_string()),
+                "srcip is a KNOWN_PATH and must not be recorded as unmapped");
+    }
+
+    #[test]
+    fn unmapped_unknown_path_is_recorded() {
+        // "my_custom_widget" is not in any constant — must appear in tracker.
+        let before_count = UNMAPPED_TRACKER.lock().unwrap()
+            .get("my_custom_widget").map(|f| f.count).unwrap_or(0);
+        let data = serde_json::json!({"my_custom_widget": "xyz"});
+        track_unmapped_fields(&data, &no_custom());
+        let after_count = UNMAPPED_TRACKER.lock().unwrap()
+            .get("my_custom_widget").map(|f| f.count).unwrap_or(0);
+        assert_eq!(after_count, before_count + 1,
+            "unknown field must be recorded in UNMAPPED_TRACKER");
+    }
+
+    #[test]
+    fn unmapped_custom_mapped_field_not_recorded() {
+        // A field in the user's custom field_map must NOT appear as unmapped.
+        let field = "my_mapped_field_xyz";
+        let mut cm = no_custom();
+        cm.field_map.insert(field.to_string(), "src_ip".to_string());
+        let before = UNMAPPED_TRACKER.lock().unwrap()
+            .get(field).map(|f| f.count).unwrap_or(0);
+        let data = serde_json::json!({"my_mapped_field_xyz": "10.0.0.1"});
+        track_unmapped_fields(&data, &cm);
+        let after = UNMAPPED_TRACKER.lock().unwrap()
+            .get(field).map(|f| f.count).unwrap_or(0);
+        assert_eq!(after, before, "custom-mapped field must not appear in unmapped tracker");
+    }
+
+    #[test]
+    fn unmapped_nested_unknown_path_is_recorded() {
+        // Nested path "vendor.info.extra" — not in any constant.
+        let key = "vendor.info.extra_field_abc123";
+        let before = UNMAPPED_TRACKER.lock().unwrap()
+            .get(key).map(|f| f.count).unwrap_or(0);
+        let data = serde_json::json!({"vendor": {"info": {"extra_field_abc123": "v"}}});
+        track_unmapped_fields(&data, &no_custom());
+        let after = UNMAPPED_TRACKER.lock().unwrap()
+            .get(key).map(|f| f.count).unwrap_or(0);
+        assert_eq!(after, before + 1);
+    }
+
+    #[test]
+    fn write_unmapped_report_creates_valid_json() {
+        // Seed the tracker with a test-specific field and write to a temp file.
+        {
+            let mut g = UNMAPPED_TRACKER.lock().unwrap();
+            g.insert("test_write_field".to_string(), FieldInfo {
+                count: 7,
+                example: "hello".to_string(),
+                suggested_toml: "# test".to_string(),
+            });
+        }
+        let tmp = std::env::temp_dir().join("wazuh_ocsf_unmapped_test.json");
+        write_unmapped_report(&tmp);
+        let txt = std::fs::read_to_string(&tmp).expect("report file must exist");
+        let v: Value = serde_json::from_str(&txt).expect("must be valid JSON");
+        assert!(v.get("fields").is_some(), "must have 'fields' key");
+        assert!(v["fields"].get("test_write_field").is_some(),
+                "test_write_field must appear in report");
+        assert_eq!(v["fields"]["test_write_field"]["count"], 7);
+        let _ = std::fs::remove_file(&tmp);
     }
 
     // ── Cloud / JSON-decoder source integration tests ────────────────────
