@@ -36,6 +36,7 @@ use std::io::SeekFrom;
 use std::os::unix::fs::MetadataExt; // .ino() – Linux inode for rotation detection
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result};
@@ -675,6 +676,126 @@ fn write_unmapped_report(path: &Path) {
         }
         Err(e) => warn!("unmapped_fields: write failed: {e}"),
     }
+}
+
+// ─── OCSF 1.7.0 schema validator ─────────────────────────────────────────────
+//
+// Warn-only: violations are logged at WARN level but the event is ALWAYS
+// forwarded to ClickHouse — no events are ever silently dropped.
+//
+// All checks are O(1) comparisons against compile-time constant slices.
+// No heap allocation in the common (violation-free) path.
+//
+// Disable entirely with:  OCSF_VALIDATE=false  (e.g. during load testing)
+
+/// Master on/off switch for schema validation.  Set once at startup from env.
+static OCSF_VALIDATE: AtomicBool = AtomicBool::new(true);
+
+/// Cumulative count of schema violations observed since process start.
+static OCSF_VIOLATION_COUNT: AtomicU64 = AtomicU64::new(0);
+
+/// All class_uid values defined by OCSF 1.7.0 across categories 1–6.
+const VALID_CLASS_UIDS: &[u32] = &[
+    // Cat 1 — System Activity
+    1001, 1002, 1003, 1004, 1005, 1006, 1007, 1008,
+    // Cat 2 — Findings
+    2001, 2002, 2003, 2004, 2005, 2006,
+    // Cat 3 — Identity & Access Management
+    3001, 3002, 3003, 3004, 3005, 3006,
+    // Cat 4 — Network Activity
+    4001, 4002, 4003, 4004, 4005, 4006, 4007,
+    // Cat 5 — Discovery
+    5001, 5002, 5003, 5004,
+    // Cat 6 — Application Activity
+    6001, 6002, 6003, 6004, 6005,
+];
+
+/// Valid severity_id values per OCSF 1.7.0 §severity_id.
+/// 0=Unknown 1=Informational 2=Low 3=Medium 4=High 5=Critical 6=Fatal 99=Other
+const VALID_SEVERITY_IDS: &[u8] = &[0, 1, 2, 3, 4, 5, 6, 99];
+
+/// Returns the allowed activity_id values for a class_uid (OCSF 1.7.0).
+/// Returns `None` for class_uids not explicitly handled — those are skipped
+/// to avoid false positives on OCSF classes we do not yet emit.
+fn valid_activity_ids_for_class(class_uid: u32) -> Option<&'static [u8]> {
+    match class_uid {
+        // 1001 File System Activity: Create/Read/Update/Delete/Rename/Other
+        1001 => Some(&[1, 2, 3, 4, 5, 99]),
+        // 1006 Process Activity: Launch/Terminate/Open/Other
+        1006 => Some(&[1, 2, 3, 99]),
+        // Findings (2002 Vulnerability / 2003 Compliance / 2004 Detection): Create/Update/Close/Other
+        2002 | 2003 | 2004 => Some(&[1, 2, 3, 99]),
+        // 3001 Account Change: Create/Delete/Update User|Group + Change Password
+        3001 => Some(&[1, 2, 3, 7, 8, 9, 12, 99]),
+        // 3002 Authentication: Logon/Logoff/AuthenticationTicket/Other
+        3002 => Some(&[1, 2, 3, 99]),
+        // 4001 Network Activity: Open/Close/Reset/Fail/Refuse/Traffic/Other
+        4001 => Some(&[1, 2, 3, 4, 5, 6, 99]),
+        // 4002 HTTP Activity: Get/Put/Post/Delete/Connect/Options/Head/Other
+        4002 => Some(&[1, 2, 3, 4, 5, 6, 7, 99]),
+        // 4003 DNS Activity: Query/Response/Traffic/Other
+        4003 => Some(&[1, 2, 3, 99]),
+        // 4004 DHCP Activity: Assign/Renew/Release/Expire/Other
+        4004 => Some(&[1, 2, 3, 4, 99]),
+        // Unknown class — skip activity check to avoid false positives
+        _ => None,
+    }
+}
+
+/// Returns the expected `(category_uid, category_name)` for a `class_uid`.
+/// Uses the OCSF 1.7.0 range convention (1xxx → cat 1, 2xxx → cat 2, …).
+fn expected_category(class_uid: u32) -> Option<(u32, &'static str)> {
+    match class_uid {
+        1001..=1099 => Some((1, "System Activity")),
+        2001..=2099 => Some((2, "Findings")),
+        3001..=3099 => Some((3, "Identity & Access Management")),
+        4001..=4099 => Some((4, "Network Activity")),
+        5001..=5099 => Some((5, "Discovery")),
+        6001..=6099 => Some((6, "Application Activity")),
+        _           => None,
+    }
+}
+
+/// Validate an `OcsfRecord` against OCSF 1.7.0 schema constraints.
+///
+/// Returns a `Vec` of static violation strings — empty means fully compliant.
+/// Never panics. Zero heap allocation when the record is valid (capacity-0 Vec).
+fn validate_ocsf_record(rec: &OcsfRecord) -> Vec<&'static str> {
+    let mut v: Vec<&'static str> = Vec::new(); // no heap alloc in the happy path
+
+    // 1. class_uid must be a recognised OCSF 1.7.0 class
+    if !VALID_CLASS_UIDS.contains(&rec.class_uid) {
+        v.push("class_uid not in OCSF 1.7.0 schema");
+    }
+    // 2. severity_id must be within the defined enum set
+    if !VALID_SEVERITY_IDS.contains(&rec.severity_id) {
+        v.push("severity_id out of range (expected 0-6 or 99)");
+    }
+    // 3. type_uid MUST equal class_uid * 100 + activity_id  (OCSF 1.7.0 §type_uid)
+    if rec.type_uid != rec.class_uid * 100 + rec.activity_id as u32 {
+        v.push("type_uid != class_uid * 100 + activity_id");
+    }
+    // 4. activity_id must be valid for this class
+    if let Some(valid_ids) = valid_activity_ids_for_class(rec.class_uid) {
+        if !valid_ids.contains(&rec.activity_id) {
+            v.push("activity_id not valid for this class_uid");
+        }
+    }
+    // 5. category_uid and category_name must be consistent with class_uid
+    if let Some((exp_uid, exp_name)) = expected_category(rec.class_uid) {
+        if rec.category_uid != exp_uid {
+            v.push("category_uid inconsistent with class_uid");
+        }
+        if rec.category_name != exp_name {
+            v.push("category_name inconsistent with class_uid");
+        }
+    }
+    // 6. time == 0 means @timestamp was absent or failed to parse
+    if rec.time == 0 {
+        v.push("time is 0 — @timestamp missing or unparseable in source event");
+    }
+
+    v
 }
 
 // ─── App config ─────────────────────────────────────────────────────────────
@@ -2015,7 +2136,7 @@ fn transform(
     // mappings.  Zero-cost in the happy path once all fields are known.
     track_unmapped_fields(&data_val, custom);
 
-    Some((table, OcsfRecord {
+    let rec = OcsfRecord {
         time: time_secs,
         time_dt,
         ocsf_version:     custom.ocsf_version.clone(),
@@ -2081,7 +2202,24 @@ fn transform(
         extensions:       extensions_json,
         unmapped,
         raw_data:         raw.to_string(),
-    }))
+    };
+
+    // ── OCSF schema validation ────────────────────────────────────────────
+    // Warn-only: violations are logged but the event is ALWAYS forwarded.
+    if OCSF_VALIDATE.load(Ordering::Relaxed) {
+        let violations = validate_ocsf_record(&rec);
+        if !violations.is_empty() {
+            OCSF_VIOLATION_COUNT.fetch_add(violations.len() as u64, Ordering::Relaxed);
+            warn!(
+                class_uid = rec.class_uid,
+                rule_id   = %rec.finding_uid,
+                violations = ?violations,
+                "OCSF schema violation(s) — event still recorded"
+            );
+        }
+    }
+
+    Some((table, rec))
 }
 
 // ─── ClickHouse DDL ───────────────────────────────────────────────────────────
@@ -2459,6 +2597,16 @@ async fn main() -> Result<()> {
 
     let cfg = Arc::new(AppConfig::from_env());
 
+    // ── OCSF validator: apply env var override ───────────────────────────
+    // dotenvy already ran inside AppConfig::from_env() so .env values are in
+    // the process environment and std::env::var picks them up correctly.
+    {
+        let enabled = std::env::var("OCSF_VALIDATE")
+            .map(|v| !matches!(v.trim().to_ascii_lowercase().as_str(), "0" | "false" | "no"))
+            .unwrap_or(true);
+        OCSF_VALIDATE.store(enabled, Ordering::Relaxed);
+    }
+
     // ── Startup configuration sanity checks ──────────────────────────────
     if cfg.batch_size == 0 {
         // batch_size=0 would make the size-trigger condition (len >= 0) fire on
@@ -2582,6 +2730,8 @@ async fn main() -> Result<()> {
     info!("  data_ttl_days    : {:?}", cfg.data_ttl_days);
     info!("  ocsf_version     : {}", initial_mappings.ocsf_version);
     info!("  custom_mappings  : {} rule(s)", initial_mappings.field_map.len());
+    info!("  ocsf_validate    : {} (set OCSF_VALIDATE=false to disable)",
+          OCSF_VALIDATE.load(Ordering::Relaxed));
     info!("  unmapped report  : {}", cfg.unmapped_fields_file.display());
 
     // If a prior unmapped report exists, surface the top fields so the
