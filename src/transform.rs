@@ -181,10 +181,11 @@ pub(crate) fn transform(
         if !cve.is_empty() {
             cve_id   = cve.to_string();
             vuln_sev = jpath(&data_val, "vulnerability.severity").to_string();
-            // CVSS score — prefer cvss3 base_score, fall back to score.base
+            // CVSS score — use get_data_field so numeric JSON values (e.g. 9.8) are
+            // coerced to string before parsing; jpath only handles string leaves.
             let score_str = {
-                let s = jpath(&data_val, "vulnerability.cvss.cvss3.base_score");
-                if !s.is_empty() { s } else { jpath(&data_val, "vulnerability.score.base") }
+                let s = get_data_field(&data_val, "vulnerability.cvss.cvss3.base_score");
+                if !s.is_empty() { s } else { get_data_field(&data_val, "vulnerability.score.base") }
             };
             cvss_score = score_str.parse::<f32>().unwrap_or(0.0);
             // Backfill existing typed columns if not already set
@@ -216,6 +217,31 @@ pub(crate) fn transform(
     if app_name.is_empty()   { if let Some(s) = data_val.get("package").and_then(Value::as_str)    { if !s.is_empty() { app_name = s.to_string(); } } }
     if status.is_empty()     { if let Some(s) = data_val.get("dpkg_status").and_then(Value::as_str) { if !s.is_empty() { status   = s.to_string(); } } }
 
+    // ── Syscheck (FIM) top-level section ─────────────────────────────────
+    // syscheck.path → file_name; hashes and attrs go to extensions.
+    // Natively extracted — no field_mappings.toml entry required.
+    let empty_map2 = Map::new();
+    let syscheck_obj = obj.get("syscheck").and_then(Value::as_object).unwrap_or(&empty_map2);
+    let get_sc = |k: &str| -> String {
+        syscheck_obj.get(k).and_then(Value::as_str).unwrap_or("").to_string()
+    };
+    if file_name.is_empty() {
+        let p = get_sc("path");
+        if !p.is_empty() { file_name = p; }
+    }
+
+    // ── predecoder (Wazuh top-level section) ──────────────────────────────
+    // predecoder.hostname → src_hostname; predecoder.program_name → app_name.
+    let predecoder = obj.get("predecoder").and_then(Value::as_object).unwrap_or(&empty_map2);
+    if src_hostname.is_empty() {
+        let h = predecoder.get("hostname").and_then(Value::as_str).unwrap_or("");
+        if !h.is_empty() { src_hostname = h.to_string(); }
+    }
+    if app_name.is_empty() {
+        let p = predecoder.get("program_name").and_then(Value::as_str).unwrap_or("");
+        if !p.is_empty() { app_name = p.to_string(); }
+    }
+
     // ── Custom mapping overlay ────────────────────────────────────────────
     // Only for site-specific decoder fields not handled above.
     let mut extensions: Map<String, Value> = Map::new();
@@ -223,6 +249,15 @@ pub(crate) fn transform(
     { let v = jpath(&data_val, "win.system.eventID");         if !v.is_empty() { extensions.insert("win_event_id".into(),   Value::String(v.to_string())); } }
     { let v = jpath(&data_val, "win.system.channel");         if !v.is_empty() { extensions.insert("win_channel".into(),    Value::String(v.to_string())); } }
     { let v = jpath(&data_val, "win.eventdata.logonType");    if !v.is_empty() { extensions.insert("win_logon_type".into(), Value::String(v.to_string())); } }
+    // FIM / syscheck hash digests
+    { let v = get_sc("md5_after");    if !v.is_empty() { extensions.insert("fim_md5".into(),    Value::String(v)); } }
+    { let v = get_sc("sha1_after");   if !v.is_empty() { extensions.insert("fim_sha1".into(),   Value::String(v)); } }
+    { let v = get_sc("sha256_after"); if !v.is_empty() { extensions.insert("fim_sha256".into(), Value::String(v)); } }
+    { let v = get_sc("size_after");   if !v.is_empty() { extensions.insert("fim_size".into(),   Value::String(v)); } }
+    { let v = get_sc("mode");         if !v.is_empty() { extensions.insert("fim_mode".into(),   Value::String(v)); } }
+    if let Some(ca) = syscheck_obj.get("changed_attributes") {
+        if let Ok(s) = serde_json::to_string(ca) { extensions.insert("fim_changed_attrs".into(), Value::String(s)); }
+    }
     // dpkg package version + arch
     if let Some(s) = data_val.get("version").and_then(Value::as_str) { if !s.is_empty() { extensions.insert("package_version".into(), Value::String(s.to_string())); } }
     if let Some(s) = data_val.get("arch").and_then(Value::as_str)    { if !s.is_empty() { extensions.insert("package_arch".into(),    Value::String(s.to_string())); } }
@@ -279,6 +314,12 @@ pub(crate) fn transform(
     const KNOWN: &[&str] = &[
         "@timestamp", "timestamp", "agent", "rule", "manager",
         "location", "data", "id", "decoder",
+        // Standard Wazuh top-level sections handled natively above:
+        "syscheck",        // FIM — path/hashes extracted to file_name + extensions
+        "full_log",        // Raw log text — already in raw_data
+        "predecoder",      // Pre-decoder fields extracted to src_hostname/app_name
+        "previous_log",    // Previous log entry (diff context)
+        "previous_output", // Previous alert output (diff context)
     ];
     let unmapped_obj: Map<String, Value> = obj.iter()
         .filter(|(k, _)| !KNOWN.contains(&k.as_str()))
@@ -313,9 +354,10 @@ pub(crate) fn transform(
 
         // 1001 File System Activity: Create/Read/Update/Delete/Rename/Other
         1001 => match syscheck_event.to_ascii_lowercase().as_str() {
-            "modified" | "changed" => (3, "Update"),
-            "deleted"  | "removed" => (4, "Delete"),
-            _                      => (1, "Create"),
+            "modified" | "changed"           => (3, "Update"),
+            "deleted"  | "removed"           => (4, "Delete"),
+            "renamed"  | "moved"             => (5, "Rename"),
+            _                                => (1, "Create"),
         },
 
         // 1006 Process Activity: Launch/Terminate/Open/Other
@@ -368,11 +410,35 @@ pub(crate) fn transform(
             _         => (99, "Other"),
         },
 
-        // 4003 DNS Activity
-        4003 => (1, "Query"),
+        // 4003 DNS Activity: Query/Response/Traffic
+        // Zeek dns.log + most DNS decoders set action="response" or group "dns_response"
+        // when the event represents a server answer; otherwise treat as a query.
+        4003 => {
+            let a = action.to_ascii_lowercase();
+            if grp("dns_response") || a.contains("response") || a.contains("answer") {
+                (2, "Response")
+            } else if grp("dns_traffic") || a == "traffic" {
+                (3, "Traffic")
+            } else {
+                (1, "Query")
+            }
+        },
 
-        // 4004 DHCP Activity
-        4004 => (1, "Assign"),
+        // 4004 DHCP Activity: Assign/Renew/Release/Error
+        // Wazuh dhcpd decoder exposes the DHCP message type via the ACTION field paths.
+        // DHCPREQUEST(w/ renewing/rebinding) → Renew; DHCPRELEASE → Release; DHCPNAK → Error; else Assign.
+        4004 => {
+            let a = action.to_ascii_lowercase();
+            if a.contains("release") || a == "dhcprelease" {
+                (3, "Release")
+            } else if a.contains("nak") || a.contains("nack") || a.contains("error") {
+                (4, "Error")
+            } else if a.contains("request") || a.contains("renew") || a.contains("rebind") {
+                (2, "Renew")
+            } else {
+                (1, "Assign")
+            }
+        },
 
         // All other classes (2002/2003/2004/…): Create
         _ => (1, "Create"),
