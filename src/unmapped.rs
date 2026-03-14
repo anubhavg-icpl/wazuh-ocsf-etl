@@ -127,6 +127,11 @@ static KNOWN_PATHS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
     // ── Process / sudo context (natively extracted in transform.rs) ─────────
     for p in &["uid", "tty", "pwd"] { s.insert(p); }
 
+    // ── predecoder fields (natively extracted in transform.rs) ──────────────
+    for p in &["predecoder.hostname", "predecoder.program_name", "predecoder.timestamp"] {
+        s.insert(p);
+    }
+
     s
 });
 

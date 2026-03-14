@@ -1607,4 +1607,509 @@ ocsf_version = "1.7.0"
         assert_eq!(rec.src_port, 52000u16);
         assert_eq!(rec.dst_port, 80u16);
     }
+
+    // ── syscheck / FIM: top-level section handling ────────────────────────
+
+    #[test]
+    fn transform_fim_path_extracted_to_file_name() {
+        // syscheck.path must be extracted to file_name (was missing — BUG FIX)
+        let raw = r#"{
+            "@timestamp":"2026-03-13T07:00:00Z",
+            "agent":  {"id":"001","name":"linux-srv","ip":"10.0.0.1"},
+            "rule":   {"id":"550","description":"Integrity check","level":7,
+                       "groups":["syscheck","syscheck_file"]},
+            "manager":{"name":"wazuh-mgr"},
+            "decoder":{"name":"syscheck"},
+            "location":"syscheck",
+            "full_log":"File '/etc/passwd' modified\nMode: scheduled",
+            "syscheck":{
+                "event":      "modified",
+                "path":       "/etc/passwd",
+                "md5_after":  "abc123",
+                "sha1_after": "def456",
+                "sha256_after":"ghi789",
+                "size_after": "1234",
+                "mode":       "scheduled",
+                "changed_attributes":["md5","sha1","sha256"]
+            }
+        }"#;
+        let (_, rec) = transform(raw, "db", &[], &no_custom()).unwrap();
+        assert_eq!(rec.class_uid,    1001,         "must be File System Activity");
+        assert_eq!(rec.activity_id,  3,             "modified → Update(3)");
+        assert_eq!(rec.file_name,    "/etc/passwd", "syscheck.path must land in file_name");
+
+        // hashes extracted to extensions
+        let ext: Value = serde_json::from_str(&rec.extensions).unwrap();
+        assert_eq!(ext["fim_md5"].as_str(),    Some("abc123"),  "fim_md5 in extensions");
+        assert_eq!(ext["fim_sha1"].as_str(),   Some("def456"),  "fim_sha1 in extensions");
+        assert_eq!(ext["fim_sha256"].as_str(), Some("ghi789"),  "fim_sha256 in extensions");
+        assert_eq!(ext["fim_size"].as_str(),   Some("1234"),    "fim_size in extensions");
+        assert_eq!(ext["fim_mode"].as_str(),   Some("scheduled"),"fim_mode in extensions");
+        assert!(ext["fim_changed_attrs"].is_string(),           "fim_changed_attrs in extensions");
+
+        // syscheck must NOT appear in unmapped (was leaking — BUG FIX)
+        let u: Value = serde_json::from_str(&rec.unmapped).unwrap();
+        assert!(u.get("syscheck").is_none(),  "syscheck must NOT be in unmapped");
+        assert!(u.get("full_log").is_none(),  "full_log must NOT be in unmapped");
+    }
+
+    #[test]
+    fn transform_fim_added_path_extracted() {
+        let raw = r#"{
+            "@timestamp":"2026-03-13T08:00:00Z",
+            "agent":  {"id":"001","name":"host","ip":""},
+            "rule":   {"id":"554","description":"FIM added","level":7,
+                       "groups":["syscheck","syscheck_file"]},
+            "decoder":{"name":"syscheck"},
+            "syscheck":{"event":"added","path":"/tmp/malware.sh","mode":"realtime"}
+        }"#;
+        let (_, rec) = transform(raw, "db", &[], &no_custom()).unwrap();
+        assert_eq!(rec.file_name,   "/tmp/malware.sh", "path from syscheck.path");
+        assert_eq!(rec.activity_id, 1,                 "added → Create(1)");
+        let ext: Value = serde_json::from_str(&rec.extensions).unwrap();
+        assert_eq!(ext["fim_mode"].as_str(), Some("realtime"), "fim_mode in extensions");
+    }
+
+    #[test]
+    fn transform_fim_data_file_name_wins_over_syscheck() {
+        // If data.file_name is already set (custom mapping), syscheck.path must NOT override it
+        let raw = r#"{
+            "@timestamp":"2026-03-13T09:00:00Z",
+            "agent":  {"id":"001","name":"host","ip":""},
+            "rule":   {"id":"550","description":"FIM","level":7,
+                       "groups":["syscheck","syscheck_file"]},
+            "decoder":{"name":"syscheck"},
+            "data":    {"filename":"/data/from_data_section"},
+            "syscheck":{"event":"modified","path":"/syscheck/path"}
+        }"#;
+        let mut cm = no_custom();
+        cm.field_map.insert("filename".into(), "file_name".into());
+        let (_, rec) = transform(raw, "db", &[], &cm).unwrap();
+        assert_eq!(rec.file_name, "/data/from_data_section",
+            "data section wins over syscheck.path");
+    }
+
+    // ── predecoder extraction ─────────────────────────────────────────────
+
+    #[test]
+    fn transform_predecoder_hostname_fills_src_hostname() {
+        // predecoder.hostname → src_hostname when not already set (was missing — BUG FIX)
+        let raw = r#"{
+            "@timestamp":"2026-03-13T10:00:00Z",
+            "agent":  {"id":"001","name":"linux-srv","ip":"10.0.0.1"},
+            "rule":   {"id":"5503","description":"SSH auth","level":5,
+                       "groups":["syslog","sshd"]},
+            "decoder":{"name":"sshd"},
+            "predecoder":{
+                "hostname":     "webserver01.corp.local",
+                "program_name": "sshd",
+                "timestamp":    "Mar 13 10:00:00"
+            },
+            "full_log":"Mar 13 10:00:00 webserver01.corp.local sshd[1234]: Failed password"
+        }"#;
+        let (_, rec) = transform(raw, "db", &[], &no_custom()).unwrap();
+        assert_eq!(rec.src_hostname, "webserver01.corp.local",
+            "predecoder.hostname must populate src_hostname");
+        assert_eq!(rec.app_name,     "sshd",
+            "predecoder.program_name must populate app_name");
+
+        // predecoder must NOT appear in unmapped (was leaking — BUG FIX)
+        let u: Value = serde_json::from_str(&rec.unmapped).unwrap();
+        assert!(u.get("predecoder").is_none(),   "predecoder must NOT be in unmapped");
+        assert!(u.get("full_log").is_none(),     "full_log must NOT be in unmapped");
+    }
+
+    #[test]
+    fn transform_predecoder_src_hostname_not_overridden() {
+        // If data.* already set src_hostname, predecoder must not override it
+        let raw = r#"{
+            "@timestamp":"2026-03-13T11:00:00Z",
+            "agent":  {"id":"001","name":"host","ip":""},
+            "rule":   {"id":"1","description":"test","level":3},
+            "decoder":{"name":"json"},
+            "data":    {"srchost":"actual-source.corp"},
+            "predecoder":{"hostname":"log-forwarder.corp","program_name":"myapp"}
+        }"#;
+        let mut cm = no_custom();
+        cm.field_map.insert("srchost".into(), "src_hostname".into());
+        let (_, rec) = transform(raw, "db", &[], &cm).unwrap();
+        assert_eq!(rec.src_hostname, "actual-source.corp",
+            "data-derived src_hostname wins over predecoder.hostname");
+    }
+
+    #[test]
+    fn transform_previous_output_not_in_unmapped() {
+        // previous_output and previous_log must not appear in unmapped
+        let raw = r#"{
+            "@timestamp":"2026-03-13T12:00:00Z",
+            "agent":  {"id":"001","name":"host","ip":""},
+            "rule":   {"id":"1","description":"test","level":3},
+            "decoder":{"name":"syslog"},
+            "previous_output": "previous alert text",
+            "previous_log":    "previous raw log line"
+        }"#;
+        let (_, rec) = transform(raw, "db", &[], &no_custom()).unwrap();
+        let u: Value = serde_json::from_str(&rec.unmapped).unwrap();
+        assert!(u.get("previous_output").is_none(), "previous_output must NOT be in unmapped");
+        assert!(u.get("previous_log").is_none(),    "previous_log must NOT be in unmapped");
+        // But truly unknown top-level keys still must appear
+    }
+
+    #[test]
+    fn transform_truly_unknown_toplevel_still_captured() {
+        // A completely novel top-level key still ends up in unmapped
+        let raw = r#"{
+            "@timestamp":"2026-03-13T13:00:00Z",
+            "agent":  {"id":"001","name":"host","ip":""},
+            "rule":   {"id":"1","description":"test","level":3},
+            "decoder":{"name":"syslog"},
+            "custom_vendor_extension": {"score": 99, "flag": true}
+        }"#;
+        let (_, rec) = transform(raw, "db", &[], &no_custom()).unwrap();
+        let u: Value = serde_json::from_str(&rec.unmapped).unwrap();
+        assert!(u.get("custom_vendor_extension").is_some(),
+            "unknown top-level key must still be captured in unmapped");
+    }
+
+    // ── OCSF 1.7.0 schema validator unit tests ────────────────────────────
+
+    #[test]
+    fn ocsf_validator_passes_on_valid_record() {
+        let raw = r#"{
+            "@timestamp":"2024-01-01T00:00:00Z",
+            "agent":{"id":"1","name":"host","ip":""},
+            "rule":{"id":"5503","description":"SSH failed","level":10,
+                    "groups":["sshd","authentication_failed"]},
+            "decoder":{"name":"sshd"}
+        }"#;
+        let (_, rec) = transform(raw, "db", &[], &no_custom()).unwrap();
+        let violations = crate::validator::validate_ocsf_record(&rec);
+        assert!(violations.is_empty(),
+            "valid sshd auth record must have 0 OCSF violations, got: {violations:?}");
+    }
+
+    #[test]
+    fn ocsf_validator_all_classes_produce_zero_violations() {
+        // Every classifier path must produce a schema-valid record
+        let test_cases: &[(&str, &str)] = &[
+            // (rule groups JSON array, decoder)
+            (r#"["syscheck","syscheck_file"]"#,        "syscheck"),
+            (r#"["sysmon","sysmon_process","process_creation"]"#, "sysmon"),
+            (r#"["vulnerability-detector"]"#,          "vulnerability-detector"),
+            (r#"["sca"]"#,                             "sca"),
+            (r#"["adduser","linux_account"]"#,         "adduser"),
+            (r#"["sshd","authentication_failed"]"#,    "sshd"),
+            (r#"["firewall","fortigate"]"#,             "fortigate-traffic"),
+            (r#"["web","web-log"]"#,                   "nginx"),
+            (r#"["dns"]"#,                             "named"),
+            (r#"["dhcp"]"#,                            "dhcpd"),
+            (r#"["rootkit"]"#,                         "rootcheck"),
+            (r#"["amazon-vpcflow"]"#,                  "aws-vpcflow"),
+            (r#"["amazon-guardduty"]"#,                "aws-guardduty"),
+            (r#"["okta"]"#,                            "okta"),
+            (r#"["zeek"]"#,                            "zeek"),
+        ];
+        for (groups_json, decoder) in test_cases {
+            let raw = format!(r#"{{
+                "@timestamp":"2024-01-01T00:00:00Z",
+                "agent":{{"id":"1","name":"host","ip":""}},
+                "rule":{{"id":"1","description":"test","level":5,"groups":{groups_json}}},
+                "decoder":{{"name":"{decoder}"}}
+            }}"#);
+            let (_, rec) = transform(&raw, "db", &[], &no_custom())
+                .unwrap_or_else(|| panic!("transform failed for decoder={decoder}"));
+            let violations = crate::validator::validate_ocsf_record(&rec);
+            assert!(violations.is_empty(),
+                "decoder={decoder} groups={groups_json} → violations: {violations:?}");
+        }
+    }
+
+    #[test]
+    fn ocsf_type_uid_always_derived_correctly() {
+        // Exhaustive check: type_uid == class_uid*100 + activity_id for every class path
+        let test_cases: &[(&str, &str)] = &[
+            (r#"["syscheck","syscheck_file"]"#,        "syscheck"),
+            (r#"["sshd","authentication_failed"]"#,    "sshd"),
+            (r#"["firewall","iptables"]"#,              "iptables"),
+            (r#"["ids","suricata"]"#,                   "suricata"),
+            (r#"["vulnerability-detector"]"#,           "vulnerability-detector"),
+            (r#"["dns"]"#,                              "named"),
+        ];
+        for (groups_json, decoder) in test_cases {
+            let raw = format!(r#"{{
+                "@timestamp":"2024-01-01T00:00:00Z",
+                "agent":{{"id":"1","name":"h","ip":""}},
+                "rule":{{"id":"1","description":"t","level":3,"groups":{groups_json}}},
+                "decoder":{{"name":"{decoder}"}}
+            }}"#);
+            let (_, rec) = transform(&raw, "db", &[], &no_custom()).unwrap();
+            assert_eq!(
+                rec.type_uid,
+                rec.class_uid * 100 + rec.activity_id as u32,
+                "decoder={decoder}: type_uid mismatch"
+            );
+        }
+    }
+
+    // ── Bottleneck / performance invariants ──────────────────────────────
+
+    #[test]
+    fn transform_empty_line_returns_none() {
+        assert!(transform("", "db", &[], &no_custom()).is_none());
+        assert!(transform("   \t\n", "db", &[], &no_custom()).is_none());
+    }
+
+    #[test]
+    fn transform_handles_giant_data_object_without_panic() {
+        // 1000-key data object — must not OOM or panic
+        let mut data_obj = serde_json::Map::new();
+        for i in 0..1000 {
+            data_obj.insert(format!("field_{i}"), Value::String(format!("value_{i}")));
+        }
+        let alert = serde_json::json!({
+            "@timestamp": "2024-01-01T00:00:00Z",
+            "agent": {"id": "1", "name": "stress-host", "ip": ""},
+            "rule":  {"id": "1", "description": "stress", "level": 3},
+            "data":  data_obj
+        });
+        let raw = serde_json::to_string(&alert).unwrap();
+        let result = transform(&raw, "db", &[], &no_custom());
+        assert!(result.is_some(), "large data object must transform without panic");
+        let (_, rec) = result.unwrap();
+        // All unmapped data fields must be captured in event_data
+        assert!(rec.event_data.contains("field_999"),
+            "last key must be in event_data (lossless)");
+    }
+
+    #[test]
+    fn transform_deeply_nested_json_no_stackoverflow() {
+        // 50-level deep nesting — must not stack-overflow
+        let mut v = serde_json::json!({"leaf": "value"});
+        for _ in 0..50 {
+            v = serde_json::json!({"nested": v});
+        }
+        let alert = serde_json::json!({
+            "agent": {"id": "1", "name": "h", "ip": ""},
+            "rule":  {"id": "1", "description": "deep", "level": 3},
+            "data":  v
+        });
+        let raw = serde_json::to_string(&alert).unwrap();
+        // Must complete without stack-overflow; result can be Some or None
+        let _ = transform(&raw, "db", &[], &no_custom());
+    }
+
+    #[test]
+    fn sanitize_very_long_agent_name_truncated_to_200() {
+        let long = "a".repeat(300);
+        let tbl = crate::transform::routing_table("db", &long, "", &[]);
+        // table name part (after "db.ocsf_") must be ≤ 200 chars
+        let tbl_part = tbl.strip_prefix("db.ocsf_").unwrap_or(&tbl);
+        assert!(tbl_part.len() <= 200,
+            "table segment must be ≤ 200 chars, was {}", tbl_part.len());
+    }
+
+    // ── Wazuh vulnerability detector full round-trip ──────────────────────
+
+    #[test]
+    fn transform_vuln_detector_full() {
+        let raw = r#"{
+            "@timestamp":"2024-06-01T10:00:00Z",
+            "agent":  {"id":"010","name":"vuln-host","ip":"10.0.10.1"},
+            "rule":   {"id":"23001","description":"CVE detected","level":7,
+                       "groups":["vulnerability-detector"]},
+            "manager":{"name":"wazuh-mgr"},
+            "decoder":{"name":"vulnerability-detector"},
+            "data":{
+                "vulnerability":{
+                    "cve":       "CVE-2024-99999",
+                    "title":     "Remote Code Execution",
+                    "severity":  "Critical",
+                    "status":    "Active",
+                    "reference": "https://nvd.nist.gov/vuln/detail/CVE-2024-99999",
+                    "package":{
+                        "name":         "openssl",
+                        "version":      "1.1.1",
+                        "architecture": "amd64"
+                    },
+                    "cvss":{
+                        "cvss3":{
+                            "base_score": 9.8
+                        }
+                    }
+                }
+            }
+        }"#;
+        let (_, rec) = transform(raw, "db", &[], &no_custom()).unwrap();
+        assert_eq!(rec.class_uid,    2002,           "must be Vulnerability Finding");
+        assert_eq!(rec.cve_id,       "CVE-2024-99999");
+        assert_eq!(rec.cvss_score,   9.8f32);
+        assert_eq!(rec.severity_id,  5,               "Critical → severity_id=5");
+        assert_eq!(rec.severity,     "Critical");
+        assert_eq!(rec.app_name,     "openssl",        "package name → app_name");
+        assert_eq!(rec.status,       "Active");
+        assert_eq!(rec.url,          "https://nvd.nist.gov/vuln/detail/CVE-2024-99999");
+        // OCSF validity
+        let violations = crate::validator::validate_ocsf_record(&rec);
+        assert!(violations.is_empty(), "vuln record must pass OCSF validation: {violations:?}");
+    }
+
+    // ── State persistence ─────────────────────────────────────────────────
+
+    #[test]
+    fn state_store_save_and_load_roundtrip() {
+        let tmp = std::env::temp_dir().join("wazuh_ocsf_state_test.pos");
+        let store = crate::state::StateStore::new(tmp.clone());
+        let saved = crate::state::TailState { inode: 12345678, offset: 999999 };
+        store.save(&saved).expect("save must succeed");
+        let loaded = store.load();
+        assert_eq!(loaded.inode,  12345678, "inode must round-trip");
+        assert_eq!(loaded.offset, 999999,   "offset must round-trip");
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    #[test]
+    fn state_store_missing_file_returns_defaults() {
+        let tmp = std::env::temp_dir().join("wazuh_ocsf_state_nonexistent_xyz.pos");
+        let _ = std::fs::remove_file(&tmp); // ensure it doesn't exist
+        let store = crate::state::StateStore::new(tmp);
+        let s = store.load();
+        assert_eq!(s.inode,  0, "missing state file → inode=0");
+        assert_eq!(s.offset, 0, "missing state file → offset=0");
+    }
+
+    #[test]
+    fn state_store_corrupt_file_returns_defaults() {
+        let tmp = std::env::temp_dir().join("wazuh_ocsf_state_corrupt.pos");
+        std::fs::write(&tmp, "not_valid_key_value_format\nbinary\x01data").unwrap();
+        let store = crate::state::StateStore::new(tmp.clone());
+        let s = store.load();
+        // Corrupt data → should not panic, returns 0/0 or partial parse
+        assert!(s.inode  < u64::MAX, "must not panic on corrupt state");
+        assert!(s.offset < u64::MAX, "must not panic on corrupt state");
+        let _ = std::fs::remove_file(&tmp);
+    }
+
+    // ── activity_id gap fixes ─────────────────────────────────────────────
+
+    #[test]
+    fn transform_fim_renamed_maps_to_rename_activity() {
+        // syscheck.event="renamed" must produce activity_id=5, not erroneously Create(1)
+        let raw = r#"{
+            "@timestamp":"2026-03-14T10:00:00Z",
+            "agent":  {"id":"001","name":"host","ip":"10.0.0.1"},
+            "rule":   {"id":"550","description":"FIM renamed","level":7,
+                       "groups":["syscheck","syscheck_file"]},
+            "decoder":{"name":"syscheck"},
+            "syscheck":{"event":"renamed","path":"/etc/passwd","mode":"realtime"}
+        }"#;
+        let (_, rec) = transform(raw, "db", &[], &no_custom()).unwrap();
+        assert_eq!(rec.activity_id,   5,        "renamed → Rename(5)");
+        assert_eq!(rec.activity_name, "Rename", "activity_name must match");
+        assert_eq!(rec.file_name,     "/etc/passwd");
+    }
+
+    #[test]
+    fn transform_fim_moved_maps_to_rename_activity() {
+        let raw = r#"{
+            "@timestamp":"2026-03-14T10:01:00Z",
+            "agent":  {"id":"001","name":"host","ip":"10.0.0.1"},
+            "rule":   {"id":"550","description":"FIM moved","level":7,
+                       "groups":["syscheck","syscheck_file"]},
+            "decoder":{"name":"syscheck"},
+            "syscheck":{"event":"moved","path":"/tmp/exploit","mode":"realtime"}
+        }"#;
+        let (_, rec) = transform(raw, "db", &[], &no_custom()).unwrap();
+        assert_eq!(rec.activity_id,   5,        "moved → Rename(5)");
+        assert_eq!(rec.activity_name, "Rename");
+    }
+
+    #[test]
+    fn transform_dns_response_group_maps_to_response_activity() {
+        let raw = r#"{
+            "@timestamp":"2026-03-14T10:02:00Z",
+            "agent":  {"id":"001","name":"dns-srv","ip":"10.0.0.53"},
+            "rule":   {"id":"23501","description":"DNS response","level":3,
+                       "groups":["dns","dns_response","named"]},
+            "decoder":{"name":"named"}
+        }"#;
+        let (_, rec) = transform(raw, "db", &[], &no_custom()).unwrap();
+        assert_eq!(rec.class_uid,     4003,       "DNS class");
+        assert_eq!(rec.activity_id,   2,          "dns_response group → Response(2)");
+        assert_eq!(rec.activity_name, "Response");
+    }
+
+    #[test]
+    fn transform_dns_query_default_activity() {
+        let raw = r#"{
+            "@timestamp":"2026-03-14T10:03:00Z",
+            "agent":  {"id":"001","name":"dns-srv","ip":"10.0.0.53"},
+            "rule":   {"id":"23500","description":"DNS query","level":3,
+                       "groups":["dns","named"]},
+            "decoder":{"name":"named"}
+        }"#;
+        let (_, rec) = transform(raw, "db", &[], &no_custom()).unwrap();
+        assert_eq!(rec.activity_id,   1,      "default DNS → Query(1)");
+        assert_eq!(rec.activity_name, "Query");
+    }
+
+    #[test]
+    fn transform_dhcp_release_activity() {
+        let raw = r#"{
+            "@timestamp":"2026-03-14T10:04:00Z",
+            "agent":  {"id":"001","name":"dhcp-srv","ip":"10.0.0.1"},
+            "rule":   {"id":"5800","description":"DHCP release","level":3,
+                       "groups":["dhcp"]},
+            "decoder":{"name":"dhcpd"},
+            "data":   {"action":"DHCPRELEASE"}
+        }"#;
+        let (_, rec) = transform(raw, "db", &[], &no_custom()).unwrap();
+        assert_eq!(rec.class_uid,     4004,      "DHCP class");
+        assert_eq!(rec.activity_id,   3,         "DHCPRELEASE → Release(3)");
+        assert_eq!(rec.activity_name, "Release");
+    }
+
+    #[test]
+    fn transform_dhcp_renew_activity() {
+        let raw = r#"{
+            "@timestamp":"2026-03-14T10:05:00Z",
+            "agent":  {"id":"001","name":"dhcp-srv","ip":"10.0.0.1"},
+            "rule":   {"id":"5801","description":"DHCP request","level":3,
+                       "groups":["dhcp"]},
+            "decoder":{"name":"dhcpd"},
+            "data":   {"action":"DHCPREQUEST"}
+        }"#;
+        let (_, rec) = transform(raw, "db", &[], &no_custom()).unwrap();
+        assert_eq!(rec.activity_id,   2,       "DHCPREQUEST → Renew(2)");
+        assert_eq!(rec.activity_name, "Renew");
+    }
+
+    #[test]
+    fn transform_dhcp_error_activity() {
+        let raw = r#"{
+            "@timestamp":"2026-03-14T10:06:00Z",
+            "agent":  {"id":"001","name":"dhcp-srv","ip":"10.0.0.1"},
+            "rule":   {"id":"5802","description":"DHCP nak","level":5,
+                       "groups":["dhcp"]},
+            "decoder":{"name":"dhcpd"},
+            "data":   {"action":"DHCPNAK"}
+        }"#;
+        let (_, rec) = transform(raw, "db", &[], &no_custom()).unwrap();
+        assert_eq!(rec.activity_id,   4,       "DHCPNAK → Error(4)");
+        assert_eq!(rec.activity_name, "Error");
+    }
+
+    #[test]
+    fn transform_dhcp_assign_default() {
+        let raw = r#"{
+            "@timestamp":"2026-03-14T10:07:00Z",
+            "agent":  {"id":"001","name":"dhcp-srv","ip":"10.0.0.1"},
+            "rule":   {"id":"5803","description":"DHCP ack","level":3,
+                       "groups":["dhcp"]},
+            "decoder":{"name":"dhcpd"},
+            "data":   {"action":"DHCPACK"}
+        }"#;
+        let (_, rec) = transform(raw, "db", &[], &no_custom()).unwrap();
+        assert_eq!(rec.activity_id,   1,        "DHCPACK → Assign(1)");
+        assert_eq!(rec.activity_name, "Assign");
+    }
 }

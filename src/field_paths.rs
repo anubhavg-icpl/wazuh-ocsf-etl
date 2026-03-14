@@ -7,7 +7,9 @@
 pub(crate) const SRC_IP: &[&str] = &[
     // Generic syslog / OSSEC (256 decoders use srcip)
     "srcip", "src_ip", "source_ip", "source_address", "sourceip", "sourceIpAddress",
-    "src", "ip", "host_ip", "ip_address", "proxy_ip", "xff_address",
+    "src", "ip", "IP",            // uppercase IP variant (some vendor decoders)
+    "client",                      // squid/proxy/proftpd: client = connecting source
+    "host_ip", "ip_address", "proxy_ip", "xff_address",
     // Lowercase variants seen across miscellaneous decoders
     "locip",         // pfSense/ipfw: local (source) IP
     "ipaddr",        // DHCP / keepalived
@@ -156,6 +158,7 @@ pub(crate) const BYTES_IN: &[&str] = &[
     "aws.additionalEventData.bytesTransferredIn",
     // AWS VPC Flow — total bytes for the flow
     "aws.bytes",
+    "recv_bytes",        // generic received bytes (some syslog decoders)
 ];
 
 pub(crate) const BYTES_OUT: &[&str] = &[
@@ -163,6 +166,7 @@ pub(crate) const BYTES_OUT: &[&str] = &[
     "sentbyte",
     // generic
     "bytes_sent", "bytes_out", "bytesOut",
+    "sent_bytes",        // explicit variant (some syslog decoders)
     // Case variants / other vendors
     "BytesSent",         // Check Point / Cylance
     "bytes_from_client", // proxy / WAF logs (client → server = outbound)
@@ -173,6 +177,8 @@ pub(crate) const BYTES_OUT: &[&str] = &[
 pub(crate) const ACTOR_USER: &[&str] = &[
     // Generic (80 decoders use user/srcuser/username)
     "srcuser", "src_user", "user", "username", "user_name", "source_user",
+    "account",           // generic account field
+    "admin",             // admin username field (some management decoders)
     "userName", "userAccount",
     "userid", "userID",      // lowercase / camelCase user-id variants
     "LoggedUser",            // Check Point / Prelude: currently-logged-in user
@@ -244,6 +250,7 @@ pub(crate) const URL: &[&str] = &[
     "URL", // uppercase variant (some CEF / HP ArcSight decoders)
     "win.eventdata.objectName",
     "aws.requestParameters.url",
+    "request",        // HTTP request line / path (web access log decoders)
     // AWS S3 — bucket name / key being accessed
     "aws.requestParameters.bucketName",
     "gcp.protoPayload.resourceName",
@@ -270,6 +277,7 @@ pub(crate) const APP_NAME: &[&str] = &[
     "service", "service_name",
     "product_name",  // generic product/software name (many vendors)
     "product",       // compact product field
+    "product.name",  // McAfee / Symantec / FireEye / Kaspersky / RSA decoder field (38 decoders)
     "protocol",      // some decoders re-use protocol as app
     // AWS CloudTrail — which AWS service was called (e.g. "ec2.amazonaws.com")
     "aws.eventSource",
@@ -279,6 +287,7 @@ pub(crate) const APP_NAME: &[&str] = &[
     // Okta — client application / browser
     "okta.target.alternateId",
     "okta.client.userAgent.browser",
+    "module",           // module name (OpenVPN, Apache modules — 2 decoders)
 ];
 
 pub(crate) const FILE_NAME: &[&str] = &[
@@ -303,6 +312,8 @@ pub(crate) const FILE_NAME: &[&str] = &[
     "path",                     // generic path field (syslog, Linux)
     "Path",                     // uppercase variant (CEF / Windows)
     "sysmon.imageLoaded",       // Sysmon event 7: DLL/image being loaded
+    "object",            // Windows audit object path (file/registry)
+    "url_filename",      // filename extracted from URL path
 ];
 
 pub(crate) const PROCESS_NAME: &[&str] = &[
@@ -330,6 +341,8 @@ pub(crate) const PROCESS_ID: &[&str] = &[
     "process.pid",       // dot-notation PID (docker, nested decoders)
     "win.eventdata.processId", "win.eventdata.ProcessId",
     "win.system.execution.processId",
+    "sysmon.parentProcessId",  // Sysmon parent process PID
+    "sqlserver.processid",     // SQL Server audit process id
 ];
 
 pub(crate) const RULE_NAME: &[&str] = &[
@@ -345,11 +358,13 @@ pub(crate) const CATEGORY: &[&str] = &[
     "category", "cat", "appcat", "application_category",
     // PAN-OS / FortiGate
     "subtype", "sub_cat",
+    "subcat",            // no-underscore variant (6 decoders: FortiGate, Arbor)
     // Windows / CEF
     "Category",
     // EDR / AV threat category
     "ThreatCategory",  // Cylance threat category field
     "threat_category", // generic threat category (Trend, Sophos, etc.)
+    "log_type",        // log type used as category (some generic syslog decoders)
 ];
 
 pub(crate) const IFACE_IN: &[&str] = &[
@@ -382,6 +397,7 @@ pub(crate) const SRC_HOSTNAME: &[&str] = &[
     "AnalyzerHostName",// Prelude IDMEF analyzer host
     "TargetHostName",  // Check Point target device hostname
     "identHostName",   // ident/IDMEF source hostname
+    "serial_number",   // Fortinet/SonicWall device serial used as device identifier (7 decoders)
     "win.system.computer", "win.eventdata.workstationName",
     "win.eventdata.WorkstationName",
     "srcname",        // source name / hostname (LEEF, ArcSight)
@@ -389,12 +405,17 @@ pub(crate) const SRC_HOSTNAME: &[&str] = &[
     "caller_computer", // Windows Security logon: caller computer name
     "machine_name",   // generic machine name
     "machinename",    // no-underscore variant
+    "sysmon.sourceHostname",         // Sysmon source process host
+    "qualysguard.dns_hostname",      // Qualys scan source DNS hostname
+    "qualysguard.netbios_hostname",  // Qualys scan source NetBIOS hostname
+    "firewall_name",  // FortiGate/SonicWall/pfSense: device that generated the log (9 decoders)
 ];
 
 pub(crate) const DST_HOSTNAME: &[&str] = &[
     "dsthost", "dst_host", "destinationHostname", "destination_hostname",
     "sysmon.destinationHostname", // Sysmon Event 3: network connection dest host
     "server_name",               // HTTP SNI / TLS server name
+    "device_name",               // Fortinet / SonicWall / Sophos: name of the destination device (5 decoders)
 ];
 
 pub(crate) const ACTION: &[&str] = &[
@@ -424,6 +445,8 @@ pub(crate) const ACTION: &[&str] = &[
 
 pub(crate) const STATUS: &[&str] = &[
     "status", "result", "outcome",
+    "reason",                    // generic reason/error string (9 decoders: ipsec, vpn, radius)
+    "severity",                  // vendor severity label used as status text (7 decoders)
     "data.status",               // nested data.status from generic decoders
     "cylance_events.eventstatus", // Cylance event status
     "win.eventdata.status",  "win.eventdata.Status",
@@ -436,4 +459,6 @@ pub(crate) const STATUS: &[&str] = &[
     "azure.resultDescription",
     "audit.res",
     "audit.success",   // auditd success field ("yes"/"no" or "1"/"0")
+    "error",           // generic error field (STATUS = error outcome)
+    "event.severity",  // Prelude/RSA IDMEF analyzer event severity (38 decoders)
 ];

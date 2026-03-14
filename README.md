@@ -2,7 +2,7 @@
 
 A production-grade Wazuh → OCSF → ClickHouse pipeline written in Rust.
 
-Reads `alerts.json` exactly like Filebeat reads a log file — tracking inode and byte offset — transforms every alert to the [OCSF 1.7.0](https://github.com/ocsf/ocsf-schema/releases/tag/v1.7.0) schema, and bulk-inserts into ClickHouse. Single 3.8 MB static binary, no JVM, no agents, no Elasticsearch.
+Reads `alerts.json` exactly like Filebeat reads a log file — tracking inode and byte offset — transforms every alert to the [OCSF 1.7.0](https://github.com/ocsf/ocsf-schema/releases/tag/v1.7.0) schema, and bulk-inserts into ClickHouse. Single 4.1 MB static binary, no JVM, no agents, no Elasticsearch.
 
 ```
 Wazuh manager
@@ -26,7 +26,7 @@ This pipeline replaces the entire Elastic stack with a single binary:
 |---|---|
 | Raw Wazuh JSON — no schema, no standardisation | **OCSF 1.7.0** — every event gets `src_ip`, `actor_user`, `class_uid`, … in a vendor-neutral standard |
 | Elasticsearch needs a JVM + 16–64 GB RAM | **ClickHouse** handles millions of events on 2 GB RAM |
-| Filebeat → Logstash → Elasticsearch pipeline — 5 components | **One 3.8 MB static binary** — no JVM, no Kafka, no agents |
+| Filebeat → Logstash → Elasticsearch pipeline — 5 components | **One 4.1 MB static binary** — no JVM, no Kafka, no agents |
 | Schema drift breaks Kibana dashboards on every rule change | Hot-reloadable `field_mappings.toml` — no restart required |
 | Data loss on crash (Filebeat loses in-flight lines) | Inode + byte-offset state survives restarts and log rotation |
 | Wazuh alerts locked in Elastic — no easy cross-vendor correlation | OCSF standard means Wazuh alerts can be JOINed with CrowdStrike, AWS CloudTrail, Okta and any other OCSF source |
@@ -35,7 +35,7 @@ This pipeline replaces the entire Elastic stack with a single binary:
 
 | Solution | RAM needed | Schema standard | Config reload | Binary size |
 |---|---|---|---|---|
-| **This tool** | ~50 MB | OCSF 1.7.0 (latest) | Yes — 10 s | 3.8 MB |
+| **This tool** | ~50 MB | OCSF 1.7.0 (latest) | Yes — 10 s | 4.1 MB |
 | Wazuh + Elasticsearch stack | 16–64 GB (JVM) | None (raw JSON) | No — restart | N/A |
 | Wazuh + Logstash pipeline | 4–8 GB (JVM) | Custom only | No — restart | N/A |
 | Splunk forwarder | 4–8 GB | Partial | No | N/A |
@@ -77,6 +77,7 @@ A full GitHub search across `wazuh+ocsf+clickhouse`, `siem+ocsf+clickhouse`, and
 16. [Wazuh rule fields in ClickHouse](#16-wazuh-rule-fields-in-clickhouse)
 17. [Wazuh cluster deployment](#17-wazuh-cluster-deployment)
 18. [OCSF schema validation](#18-ocsf-schema-validation)
+19. [Field standardisation: 1,108 decoder fields → 29 OCSF columns](#19-field-standardisation-1108-decoder-fields--29-ocsf-columns)
 
 ---
 
@@ -110,11 +111,14 @@ Then restart: `systemctl restart wazuh-manager`
 # Clone / copy source
 cd /root/rust-ocsf
 
-# Release build (optimised, ~3.8 MB)
+# Release build (optimised, ~4.1 MB)
 cargo build --release
 
 # Binary location
 ls -lh target/release/wazuh-ocsf-etl
+
+# Run the test suite (114 unit tests)
+cargo test
 ```
 
 To cross-compile for a target without Rust installed, copy the single binary — it has no runtime dependencies.
@@ -944,6 +948,39 @@ Every alert is automatically classified. The class is written to the `class_uid`
 | 4003 | DNS Activity | 4 | `named`, `dns` decoders |
 | 4004 | DHCP Activity | 4 | `dhcpd` decoder; `dhcp` group |
 
+### `activity_id` values per class
+
+Each class has a specific set of valid `activity_id` values. Below are the classes with non-trivial activity routing.
+
+**File System Activity (1001):**
+
+| `activity_id` | Meaning | Trigger |
+|---|---|---|
+| 1 | Create | `syscheck.event = "added"` |
+| 2 | Read | `syscheck.event = "read"` |
+| 3 | Update | `syscheck.event = "modified"` |
+| 4 | Delete | `syscheck.event = "deleted"` |
+| 5 | Rename | `syscheck.event = "renamed"` or `"moved"` |
+
+**DNS Activity (4003):**
+
+| `activity_id` | Meaning | Trigger |
+|---|---|---|
+| 1 | Query | default (outgoing lookup) |
+| 2 | Response | rule group `dns_response`, or action contains `"response"` / `"answer"` |
+| 3 | Traffic | action contains `"traffic"` |
+
+**DHCP Activity (4004):**
+
+| `activity_id` | Meaning | Trigger |
+|---|---|---|
+| 1 | Assign | `DHCPACK`, `"ack"`, `"assigned"` (default) |
+| 2 | Renew | `DHCPREQUEST`, `"request"`, `"renew"`, `"rebind"` |
+| 3 | Release | `DHCPRELEASE`, `"release"` |
+| 4 | Error | `DHCPNAK`, `"nak"`, `"nack"`, `"error"` |
+
+---
+
 ### `status_id` values per OCSF class
 
 OCSF 1.7.0 defines **different** `status_id` enums depending on the class profile:
@@ -1345,3 +1382,48 @@ OCSF_VALIDATE=false
 ```
 
 At 10,000 EPS the validator adds roughly 0–1 µs per event (all hot-cache integer comparisons). Disabling it will not measurably change throughput in normal operation — it is provided for completeness.
+
+---
+
+## 19. Field standardisation: 1,108 decoder fields → 29 OCSF columns
+
+Wazuh ships with **120 decoder files** covering over 300 distinct log sources (Linux syslog, Windows Event Log, Cisco, Palo Alto, Fortinet, AWS, Okta, Zeek, Suricata, and many more). Together they produce **1,108 unique field names** across all sources — no two vendors agree on naming.
+
+This pipeline consolidates all 1,108 names to **29 typed OCSF ClickHouse columns** through the field resolver (`src/field_paths.rs`), which holds **417 source-name variants** mapped to those 29 targets. Zero data is lost — the 835 vendor-opaque fields that have no OCSF equivalent are written to the `event_data` JSON column intact.
+
+### Coverage summary
+
+| Source diversity | After pipeline |
+|---|---|
+| 1,108 unique Wazuh decoder field names | 29 typed OCSF columns |
+| 120 decoder files, 300+ log sources | Every record has the same schema |
+| 417 source-field variants resolved | 835 vendor-opaque fields → `event_data` blob |
+| 22.9 % of decoder fields standardised | 100 % of data preserved |
+
+### Consolidation ratio per column
+
+The columns with the highest incoming-variant count — all collapsed to one standard name:
+
+| OCSF column | Input variants → 1 | Example original field names |
+|---|---|---|
+| `src_ip` | 44 → 1 | `srcip`, `src_ip`, `IP`, `client`, `aws.sourceIPAddress`, `zeek.id.orig_h`, `okta.client.ipAddress`, `Initiator` |
+| `actor_user` | 42 → 1 | `user`, `srcuser`, `username`, `audit.auid`, `aws.userIdentity.userName`, `okta.actor.alternateId`, `account`, `admin` |
+| `status` | 23 → 1 | `status`, `result`, `event.severity`, `reason`, `severity`, `okta.outcome.result`, `audit.success`, `error` |
+| `dst_ip` | 20 → 1 | `dstip`, `dst_ip`, `aws.responseElements.ipAddress`, `zeek.id.resp_h`, `destinationIp` |
+| `src_port` | 14 → 1 | `srcport`, `src_port`, `zeek.id.orig_p`, `data.sport` |
+| `dst_port` | 14 → 1 | `dstport`, `dst_port`, `zeek.id.resp_p`, `data.dport` |
+| `app_name` | 13 → 1 | `program`, `app`, `product.name`, `module`, `vulnerability.package.name`, `win.system.providerName` |
+| `file_path` | 12 → 1 | `syscheck.path`, `sysmon.targetFilename`, `audit.file.name`, `object`, `url_filename` |
+| `process_name` | 10 → 1 | `process.name`, `sysmon.image`, `audit.exe`, `win.eventdata.processName` |
+
+### Verified against OCSF 1.7.0
+
+All 835 fields left in `event_data` were checked against the complete OCSF 1.7.0 attribute dictionary across all 31 classes and `base_event`. None of them have an equivalent typed OCSF column — they are legitimately vendor-opaque identifiers, internal codes, and platform-specific metrics. Storing them in `event_data` is correct per the OCSF extensibility model (§ "Profiles & Extensions").
+
+### Adding more mappings
+
+Promote any field from `event_data` to a typed column either:
+- **At runtime** via `config/field_mappings.toml` — hot-reloaded within 10 s, no restart. See [§9](#9-custom-field-mappings).
+- **At compile time** — add a source variant to the appropriate constant in `src/field_paths.rs` and rebuild.
+
+Use the unmapped-field report ([§11](#11-unmapped-field-discovery)) to identify the highest-frequency unmapped fields from live traffic before deciding which to promote.
