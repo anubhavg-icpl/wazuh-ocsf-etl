@@ -26,6 +26,60 @@ async fn insert_batch(
     Ok(())
 }
 
+/// For each non-standard custom mapping target, auto-create a dedicated
+/// ClickHouse column that materializes its value out of the `extensions` JSON.
+/// Tries every column independently — a single failure does not abort the rest.
+/// Returns the names of columns that were successfully applied so callers can
+/// track which ones still need to be retried.
+pub(crate) async fn ensure_custom_columns(
+    url:      &str,
+    user:     &str,
+    password: &str,
+    table:    &str,
+    columns:  &[String],
+) -> Vec<String> {
+    if columns.is_empty() { return Vec::new(); }
+    // Reject malformed table identifiers early — routing_table() always
+    // produces "db.tbl" so this guard only fires on programmer error.
+    let (db_part, tbl_part) = match table.split_once('.') {
+        Some(pair) => pair,
+        None => {
+            error!("ensure_custom_columns: table `{table}` missing db prefix — skipping");
+            return Vec::new();
+        }
+    };
+    let ddl_client = Client::default()
+        .with_url(url)
+        .with_user(user)
+        .with_password(password);
+    let mut applied = Vec::with_capacity(columns.len());
+    for col in columns {
+        // Sanitize: only alphanumeric + underscore to prevent SQL injection.
+        // Single-quoted '{safe}' inside the DDL is safe because this
+        // character class excludes all SQL metacharacters.
+        let safe: String = col.chars()
+            .map(|c| if c.is_ascii_alphanumeric() || c == '_' { c } else { '_' })
+            .collect();
+        if safe.is_empty() { continue; }
+        let ddl = format!(
+            "ALTER TABLE `{db_part}`.`{tbl_part}` \
+             ADD COLUMN IF NOT EXISTS `{safe}` String \
+             MATERIALIZED JSONExtractString(extensions, '{safe}') \
+             CODEC(ZSTD(3))"
+        );
+        match ddl_client.query(&ddl).execute().await {
+            Ok(_) => {
+                info!(column = %safe, table = %table, "auto-added custom column");
+                applied.push(col.clone());
+            }
+            Err(e) => {
+                error!(column = %safe, table = %table, "add custom column failed: {e:#}");
+            }
+        }
+    }
+    applied
+}
+
 pub(crate) async fn flush_all(
     client:       &Client,
     url:          &str,
@@ -35,6 +89,7 @@ pub(crate) async fn flush_all(
     ttl_days:     Option<u32>,
     batches:      &mut BatchMap,
     known_tables: &mut HashSet<String>,
+    custom_cols:  &[String],
 ) {
     let work: Vec<(String, Vec<OcsfRecord>)> = batches
         .iter_mut()
@@ -53,7 +108,17 @@ pub(crate) async fn flush_all(
     for (table, records) in work {
         if !known_tables.contains(&table) {
             match ensure_table(client, url, user, password, db, &table, ttl_days).await {
-                Ok(_)  => { known_tables.insert(table.clone()); info!("table ready: {table}"); }
+                Ok(_)  => {
+                    known_tables.insert(table.clone());
+                    info!("table ready: {table}");
+                    if !custom_cols.is_empty() {
+                        // Errors are already logged inside ensure_custom_columns.
+                        // IF NOT EXISTS makes each call idempotent; any columns
+                        // that failed here will be retried by do_flush on the
+                        // next timer tick via the known_custom_cols diff check.
+                        ensure_custom_columns(url, user, password, &table, custom_cols).await;
+                    }
+                }
                 Err(e) => { error!("ensure_table {table}: {e:#}"); continue; }
             }
         }

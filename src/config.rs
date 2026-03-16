@@ -141,6 +141,23 @@ pub(crate) struct MetaSection {
 
 pub(crate) fn default_ocsf_version() -> String { "1.7.0".to_string() }
 
+/// Standard OCSF mapping targets that correspond to typed ClickHouse columns in
+/// `OcsfRecord`.  Any `field_mappings.toml` value NOT in this list is an
+/// "unknown target" — it lands in the `extensions` JSON column and is also
+/// auto-promoted to its own dedicated ClickHouse column via
+/// `MATERIALIZED JSONExtractString(extensions, '<target>')`.
+pub(crate) const STANDARD_OCSF_TARGETS: &[&str] = &[
+    "src_ip", "dst_ip", "src_port", "dst_port",
+    "nat_src_ip", "nat_dst_ip", "nat_src_port", "nat_dst_port",
+    "actor_user", "target_user", "domain",
+    "url", "http_method", "http_status", "app_name",
+    "src_hostname", "dst_hostname",
+    "file_name", "process_name", "process_id",
+    "rule_name", "category", "action", "status",
+    "interface_in", "interface_out",
+    "bytes_in", "bytes_out", "network_protocol",
+];
+
 /// Runtime-ready custom mappings, shared via `Arc<RwLock<_>>`.
 #[derive(Debug, Default)]
 pub struct CustomMappings {
@@ -168,5 +185,15 @@ impl CustomMappings {
             field_map:    HashMap::new(),
             ocsf_renames: HashMap::new(),
         }
+    }
+
+    /// Returns all `field_map` target values that are NOT standard OCSF typed
+    /// columns.  These currently land in `extensions` JSON and are candidates
+    /// for automatic ClickHouse column creation.
+    pub(crate) fn custom_column_targets(&self) -> Vec<String> {
+        self.field_map.values()
+            .filter(|t| !STANDARD_OCSF_TARGETS.contains(&t.as_str()))
+            .cloned()
+            .collect()
     }
 }

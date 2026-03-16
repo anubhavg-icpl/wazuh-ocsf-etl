@@ -61,7 +61,7 @@ use tracing::{debug, error, info, trace, warn};
 
 // ── Module imports ────────────────────────────────────────────────────────────
 use config::{AppConfig, CustomMappings, InputMode, CONFIG_POLL_SECS};
-use db::{flush_all, BatchMap};
+use db::{ensure_custom_columns, flush_all, BatchMap};
 use state::{StateStore, TailState};
 use tailer::reader_task;
 use transform::transform;
@@ -118,14 +118,55 @@ async fn config_watcher_task(
 // ─── Flush helper ─────────────────────────────────────────────────────────────
 
 async fn do_flush(
-    client:       &Client,
-    cfg:          &AppConfig,
-    batches:      &mut BatchMap,
-    known_tables: &mut HashSet<String>,
-    store:        &StateStore,
-    offset:       u64,
+    client:            &Client,
+    cfg:               &AppConfig,
+    batches:           &mut BatchMap,
+    known_tables:      &mut HashSet<String>,
+    known_custom_cols: &mut HashSet<String>,
+    custom_mappings:   &std::sync::RwLock<config::CustomMappings>,
+    store:             &StateStore,
+    offset:            u64,
 ) {
-    flush_all(client, &cfg.clickhouse_url, &cfg.clickhouse_user, &cfg.clickhouse_password, &cfg.clickhouse_db, cfg.data_ttl_days, batches, known_tables).await;
+    // Detect new custom column targets added since last flush (hot-reload)
+    let new_cols: Vec<String> = {
+        let g = match custom_mappings.read() {
+            Ok(g)  => g,
+            Err(e) => e.into_inner(),
+        };
+        g.custom_column_targets()
+            .into_iter()
+            .filter(|c| !known_custom_cols.contains(c))
+            .collect()
+    };
+    if !new_cols.is_empty() {
+        // Apply new columns to all already-known tables.
+        // A column is only marked as "registered" when every existing table
+        // accepted it — so a transient DDL failure causes a retry on the next
+        // flush (IF NOT EXISTS makes each attempt idempotent / safe to retry).
+        let mut failed: std::collections::HashSet<String> = std::collections::HashSet::new();
+        for table in known_tables.iter() {
+            let applied = ensure_custom_columns(
+                &cfg.clickhouse_url, &cfg.clickhouse_user, &cfg.clickhouse_password,
+                table, &new_cols,
+            ).await;
+            let applied_set: std::collections::HashSet<_> = applied.into_iter().collect();
+            for col in &new_cols {
+                if !applied_set.contains(col) {
+                    failed.insert(col.clone());
+                }
+            }
+        }
+        for col in &new_cols {
+            if !failed.contains(col) {
+                info!("hot-reload: custom column registered: `{col}`");
+                known_custom_cols.insert(col.clone());
+            } else {
+                warn!("custom column `{col}` failed for some tables — will retry next flush");
+            }
+        }
+    }
+    let all_custom: Vec<String> = known_custom_cols.iter().cloned().collect();
+    flush_all(client, &cfg.clickhouse_url, &cfg.clickhouse_user, &cfg.clickhouse_password, &cfg.clickhouse_db, cfg.data_ttl_days, batches, known_tables, &all_custom).await;
     let inode = std::fs::metadata(&cfg.alerts_file).map(|m| m.ino()).unwrap_or(0);
     if let Err(e) = store.save(&TailState { inode, offset }) {
         warn!("state save: {e:#}");
@@ -335,8 +376,11 @@ async fn main() -> Result<()> {
     }
 
     // ── Processing state ─────────────────────────────────────────────────
-    let mut batches:      BatchMap        = HashMap::new();
-    let mut known_tables: HashSet<String> = HashSet::new();
+    let mut batches:            BatchMap        = HashMap::new();
+    let mut known_tables:       HashSet<String> = HashSet::new();
+    // Tracks custom ClickHouse columns already applied via ALTER TABLE so we
+    // only issue DDL once per new unique target across all hot-reloads.
+    let mut known_custom_cols:  HashSet<String> = HashSet::new();
     let mut current_offset: u64 = start_state.offset;
 
     let mut flush_tick = interval(Duration::from_secs(cfg.flush_interval_secs));
@@ -354,6 +398,7 @@ async fn main() -> Result<()> {
                     None => {
                         info!("Reader closed — flushing final batch…");
                         do_flush(&client, &cfg, &mut batches, &mut known_tables,
+                                 &mut known_custom_cols, &custom_mappings,
                                  &state_store, current_offset).await;
                         break;
                     }
@@ -375,6 +420,7 @@ async fn main() -> Result<()> {
                             if bucket.len() >= cfg.batch_size {
                                 debug!(table = %table, rows = cfg.batch_size, "batch-size flush triggered");
                                 do_flush(&client, &cfg, &mut batches, &mut known_tables,
+                                         &mut known_custom_cols, &custom_mappings,
                                          &state_store, current_offset).await;
                             }
                         }
@@ -387,6 +433,7 @@ async fn main() -> Result<()> {
                 if pending > 0 {
                     debug!(rows = pending, tables = batches.len(), "timer flush triggered");
                     do_flush(&client, &cfg, &mut batches, &mut known_tables,
+                             &mut known_custom_cols, &custom_mappings,
                              &state_store, current_offset).await;
                 } else {
                     trace!("timer tick: no pending rows");
