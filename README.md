@@ -67,7 +67,7 @@ A full GitHub search across `wazuh+ocsf+clickhouse`, `siem+ocsf+clickhouse`, and
 6. [ZeroMQ input mode (zero disk I/O)](#6-zeromq-input-mode-zero-disk-io)
 7. [First-run behaviour (large existing files)](#7-first-run-behaviour-large-existing-files)
 8. [Peak EPS tuning](#8-peak-eps-tuning)
-9. [Custom field mappings](#9-custom-field-mappings)
+9. [Custom field mappings & auto-column creation](#9-custom-field-mappings)
 10. [Cloud / JSON-decoder source auto-mapping](#10-cloud--json-decoder-source-auto-mapping)
 11. [Unmapped-field discovery](#11-unmapped-field-discovery)
 12. [Log rotation](#12-log-rotation)
@@ -511,12 +511,41 @@ Standard target column names: `src_ip`, `dst_ip`, `src_port`, `dst_port`, `nat_s
 
 > **Note:** The column is named `app_category` (not `category`) to avoid confusion with OCSF's own event classification fields `category_uid` / `category_name`.
 
-Any unknown target name is stored in the `extensions` JSON column:
+### Custom column auto-creation (zero manual DDL)
+
+Any target name that is **not** in the standard OCSF list above is treated as a custom column. The pipeline handles it in two steps automatically — no `ALTER TABLE` or binary restart needed:
+
+1. **The value is written into the `extensions` JSON column** on every insert (same as before).
+2. **A dedicated ClickHouse column is automatically created** via `ALTER TABLE … ADD COLUMN IF NOT EXISTS` the first time the mapping is hot-reloaded after the config file is saved. The column is defined as:
+   ```sql
+   `my_custom_sensor` String
+   MATERIALIZED JSONExtractString(extensions, 'my_custom_sensor')
+   CODEC(ZSTD(3))
+   ```
+   The `MATERIALIZED` expression means ClickHouse extracts the value from `extensions` at insert time — no data is ever lost and old rows can be backfilled separately if needed.
 
 ```toml
-"crowdstrike.sha256"  = "process_sha256"    # → written to extensions{}
-"myapp.risk_score"    = "vendor_risk_score"  # → written to extensions{}
+[field_mappings]
+# These targets don't exist yet → columns are auto-created within 10 s of saving this file
+"data.my_custom_sensor" = "my_custom_sensor"
+"data.ticket_id"        = "ticket_id"
+"crowdstrike.sha256"    = "process_sha256"
+"myapp.risk_score"      = "vendor_risk_score"
 ```
+
+**What happens, step by step:**
+
+| Step | When | What |
+|---|---|---|
+| 1 | Immediately (every event) | Value stored in `extensions` JSON — zero data loss even before DDL runs |
+| 2 | ≤10 seconds (hot-reload) | Config watcher detects file change, new targets registered |
+| 3 | Next flush | `ALTER TABLE … ADD COLUMN IF NOT EXISTS` runs on every existing `ocsf_*` table |
+| 4 | Any new table created later | Column applied automatically as part of `ensure_table` |
+| 5 | Retry on failure | If DDL fails (transient), the column stays unregistered and is retried on the next flush tick |
+
+The operation is fully **idempotent** — `IF NOT EXISTS` means it is safe to call repeatedly and safe across restarts.
+
+> **Column name safety:** Only alphanumeric characters and underscores are allowed in auto-created column names. Any other character in the target name is silently replaced with `_` before the DDL is issued, preventing SQL injection.
 
 ### Handle nested fields
 
