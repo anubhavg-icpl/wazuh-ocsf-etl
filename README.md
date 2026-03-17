@@ -200,13 +200,72 @@ See [§7](#7-custom-field-mappings) for details.
 
 ## 5. Deploy as a systemd service
 
-### Install the binary
+### One-command install (recommended)
+
+A bundled `install.sh` script handles every step — user creation, directory layout, `.env`, field mappings, and the systemd unit — in one shot.
+
+```bash
+# Make executable (only needed once)
+chmod +x install.sh
+
+# Run as root with the path to your binary
+sudo ./install.sh /path/to/wazuh-ocsf-etl
+
+# Example using the release build from this repo:
+sudo ./install.sh ./target/release/wazuh-ocsf-etl
+```
+
+**What the script does (all 8 steps):**
+
+| Step | Action |
+|---|---|
+| 1 | Validates the binary (ELF check) and installs it to `/usr/local/bin/wazuh-ocsf-etl` |
+| 2 | Creates system user `wazuh-ocsf` (no login shell, home → `/opt/wazuh-ocsf`) |
+| 3 | Creates `/opt/wazuh-ocsf/{config,state}` |
+| 4 | Writes a fully-commented `.env` to `/opt/wazuh-ocsf/.env` (skipped if already present) |
+| 5 | Deploys `config/field_mappings.toml` (skipped if already present — preserves customisations) |
+| 6 | Sets ownership/permissions; adds `wazuh-ocsf` to the `wazuh` group for `alerts.json` access |
+| 7 | Writes `/etc/systemd/system/wazuh-ocsf-etl.service` with security hardening |
+| 8 | Runs `systemctl daemon-reload` and `systemctl enable wazuh-ocsf-etl` |
+
+After the script completes:
+
+```bash
+# 1. Edit the config with your ClickHouse details
+nano /opt/wazuh-ocsf/.env
+
+# 2. Start the service
+systemctl start wazuh-ocsf-etl
+
+# 3. Check status
+systemctl status wazuh-ocsf-etl
+
+# 4. Watch live logs
+journalctl -u wazuh-ocsf-etl -f
+```
+
+To uninstall:
+
+```bash
+sudo ./install.sh --uninstall
+# Then optionally:
+rm -rf /opt/wazuh-ocsf
+userdel wazuh-ocsf
+```
+
+> **Re-running is safe.** If a `.env` or `field_mappings.toml` already exists the script skips those files, so re-running on an existing installation only updates the binary and service unit.
+
+---
+
+### Manual install (alternative)
+
+#### Install the binary
 
 ```bash
 install -m 755 target/release/wazuh-ocsf-etl /usr/local/bin/
 ```
 
-### Create a dedicated user
+#### Create a dedicated user
 
 ```bash
 useradd -r -s /sbin/nologin -d /opt/wazuh-ocsf wazuh-ocsf
@@ -760,6 +819,24 @@ systemctl stop wazuh-ocsf-etl   # sends SIGTERM → graceful drain
 ---
 
 ## 13. Upgrading
+
+### Using install.sh (recommended)
+
+Re-running `install.sh` is safe — it stops the service, replaces the binary, updates the systemd unit, and restarts. Your `.env` and `field_mappings.toml` are **never overwritten**.
+
+```bash
+# Build new binary
+cargo build --release
+
+# Re-run installer — updates binary + service unit only
+sudo ./install.sh ./target/release/wazuh-ocsf-etl
+
+# Start the service
+systemctl start wazuh-ocsf-etl
+journalctl -u wazuh-ocsf-etl -f
+```
+
+### Manual upgrade
 
 ```bash
 # 1. Build new binary
