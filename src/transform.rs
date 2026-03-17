@@ -103,6 +103,9 @@ pub(crate) fn transform(
     let rule_desc  = get(rule, "description");
     let rule_level = rule.get("level").and_then(Value::as_u64).unwrap_or(0);
     let rule_fired_times = rule.get("firedtimes").and_then(Value::as_u64).unwrap_or(0) as u32;
+    // Overridable by decoder-specific extraction below (e.g. sca.check.title)
+    let mut finding_title_override = String::new();
+    let mut finding_uid_override   = String::new();
     let rule_groups: Vec<&str> = rule.get("groups")
         .and_then(Value::as_array)
         .map(|a| a.iter().filter_map(Value::as_str).collect())
@@ -242,6 +245,47 @@ pub(crate) fn transform(
         if !p.is_empty() { app_name = p.to_string(); }
     }
 
+    // ── SCA (Security Configuration Assessment) — class 2003 ─────────────
+    // sca.check.* live inside the data sub-object when Wazuh fires SCA rules.
+    // Map them to the most appropriate typed OCSF/ClickHouse columns so that
+    // Compliance Finding rows have meaningful typed values, not just raw_data.
+    {
+        // finding_title: prefer sca.check.title over the generic rule description
+        if finding_title_override.is_empty() {
+            let v = jpath(&data_val, "sca.check.title");
+            if !v.is_empty() { finding_title_override = v.to_string(); }
+        }
+        // finding_uid: prefer the actual SCA check ID over the Wazuh rule ID
+        if finding_uid_override.is_empty() {
+            let v = jpath(&data_val, "sca.check.id");
+            if !v.is_empty() { finding_uid_override = v.to_string(); }
+        }
+        // status: sca.check.result → "pass" | "fail" | "not applicable"
+        if status.is_empty() {
+            let v = jpath(&data_val, "sca.check.result");
+            if !v.is_empty() { status = v.to_string(); }
+        }
+        // app_name: sca.policy is the benchmark name (e.g. "CIS Microsoft Windows 10")
+        if app_name.is_empty() {
+            let v = jpath(&data_val, "sca.policy");
+            if !v.is_empty() { app_name = v.to_string(); }
+        }
+    }
+
+    // ── Linux audit / SELinux AVC events ─────────────────────────────────
+    // audit.directory.name is the path being accessed (maps to file_name).
+    // audit.id is a unique audit serial number (maps to finding_uid fallback).
+    {
+        if file_name.is_empty() {
+            let v = jpath(&data_val, "audit.directory.name");
+            if !v.is_empty() { file_name = v.to_string(); }
+        }
+        if finding_uid_override.is_empty() {
+            let v = jpath(&data_val, "audit.id");
+            if !v.is_empty() { finding_uid_override = v.to_string(); }
+        }
+    }
+
     // ── Custom mapping overlay ────────────────────────────────────────────
     // Only for site-specific decoder fields not handled above.
     let mut extensions: Map<String, Value> = Map::new();
@@ -249,6 +293,24 @@ pub(crate) fn transform(
     { let v = jpath(&data_val, "win.system.eventID");         if !v.is_empty() { extensions.insert("win_event_id".into(),   Value::String(v.to_string())); } }
     { let v = jpath(&data_val, "win.system.channel");         if !v.is_empty() { extensions.insert("win_channel".into(),    Value::String(v.to_string())); } }
     { let v = jpath(&data_val, "win.eventdata.logonType");    if !v.is_empty() { extensions.insert("win_logon_type".into(), Value::String(v.to_string())); } }
+    // Windows SCM positional parameters (context-dependent per Event ID — store verbatim)
+    for i in 1u8..=7 {
+        let key = format!("win.eventdata.param{i}");
+        let v = jpath(&data_val, &key);
+        if !v.is_empty() { extensions.insert(format!("win_param{i}"), Value::String(v.to_string())); }
+    }
+    // Windows raw event binary (hex-encoded)
+    { let v = jpath(&data_val, "win.eventdata.binary"); if !v.is_empty() { extensions.insert("win_event_binary".into(), Value::String(v.to_string())); } }
+    // SCA extended context (check details beyond the typed columns above)
+    { let v = jpath(&data_val, "sca.scan_id");                if !v.is_empty() { extensions.insert("sca_scan_id".into(),         Value::String(v.to_string())); } }
+    { let v = jpath(&data_val, "sca.check.compliance.cis");   if !v.is_empty() { extensions.insert("sca_cis_control".into(),     Value::String(v.to_string())); } }
+    { let v = jpath(&data_val, "sca.check.compliance.cis_csc"); if !v.is_empty() { extensions.insert("sca_cis_csc".into(),       Value::String(v.to_string())); } }
+    { let v = jpath(&data_val, "sca.check.description");      if !v.is_empty() { extensions.insert("sca_description".into(),    Value::String(v.to_string())); } }
+    { let v = jpath(&data_val, "sca.check.rationale");        if !v.is_empty() { extensions.insert("sca_rationale".into(),      Value::String(v.to_string())); } }
+    { let v = jpath(&data_val, "sca.check.remediation");      if !v.is_empty() { extensions.insert("sca_remediation".into(),    Value::String(v.to_string())); } }
+    { let v = jpath(&data_val, "sca.check.reason");           if !v.is_empty() { extensions.insert("sca_reason".into(),         Value::String(v.to_string())); } }
+    // Linux audit AVC context
+    { let v = jpath(&data_val, "audit.type");                 if !v.is_empty() { extensions.insert("audit_type".into(),         Value::String(v.to_string())); } }
     // FIM / syscheck hash digests
     { let v = get_sc("md5_after");    if !v.is_empty() { extensions.insert("fim_md5".into(),    Value::String(v)); } }
     { let v = get_sc("sha1_after");   if !v.is_empty() { extensions.insert("fim_sha1".into(),   Value::String(v)); } }
@@ -561,8 +623,8 @@ pub(crate) fn transform(
         interface_out,
         rule_name,
         app_category,
-        finding_title:     rule_desc,
-        finding_uid:       rule_id,
+        finding_title:     if finding_title_override.is_empty() { rule_desc } else { finding_title_override },
+        finding_uid:       if finding_uid_override.is_empty()   { rule_id  } else { finding_uid_override   },
         finding_types,
         wazuh_rule_level:  rule_level as u8,
         wazuh_fired_times: rule_fired_times,
