@@ -2,3 +2,5 @@
 state/
 *.pos
 .env
+unmapped_fields.json
+*.bak
