@@ -1,0 +1,1533 @@
+{
+  "__inputs": [
+    {
+      "name": "DS_CLICKHOUSE",
+      "label": "ClickHouse",
+      "description": "ClickHouse datasource",
+      "type": "datasource",
+      "pluginId": "grafana-clickhouse-datasource",
+      "pluginName": "ClickHouse"
+    }
+  ],
+  "__elements": {},
+  "__requires": [
+    {
+      "type": "datasource",
+      "id": "grafana-clickhouse-datasource",
+      "name": "ClickHouse",
+      "version": "4.0.0"
+    },
+    {
+      "type": "grafana",
+      "id": "grafana",
+      "name": "Grafana",
+      "version": "10.0.0"
+    }
+  ],
+  "annotations": {
+    "list": []
+  },
+  "description": "Wazuh \u2192 OCSF ETL pipeline health: ingestion rate, field fill rates, transformation correctness, per-agent stats, ClickHouse table health.",
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [],
+  "refresh": "30s",
+  "schemaVersion": 38,
+  "tags": [
+    "wazuh",
+    "ocsf",
+    "etl",
+    "pipeline",
+    "clickhouse"
+  ],
+  "time": {
+    "from": "now-24h",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "Wazuh OCSF ETL Pipeline Health",
+  "uid": "wazuh-ocsf-etl-health-v1",
+  "version": 1,
+  "weekStart": "",
+  "templating": {
+    "list": [
+      {
+        "current": {},
+        "hide": 0,
+        "includeAll": false,
+        "label": "ClickHouse Datasource",
+        "multi": false,
+        "name": "DS_CLICKHOUSE",
+        "options": [],
+        "query": "grafana-clickhouse-datasource",
+        "refresh": 1,
+        "type": "datasource"
+      }
+    ]
+  },
+  "panels": [
+    {
+      "id": 2000,
+      "type": "row",
+      "title": "\u2500\u2500 ETL PIPELINE HEALTH \u2500\u2500",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 0,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 201,
+      "type": "stat",
+      "title": "Total Records Ingested",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${DS_CLICKHOUSE}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 1,
+        "w": 3,
+        "h": 4
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${DS_CLICKHOUSE}"
+          },
+          "rawSql": "SELECT count() AS \"Total\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time)",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 202,
+      "type": "stat",
+      "title": "Records Last 1h",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${DS_CLICKHOUSE}"
+      },
+      "gridPos": {
+        "x": 3,
+        "y": 1,
+        "w": 3,
+        "h": 4
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "teal"
+          },
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "teal",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${DS_CLICKHOUSE}"
+          },
+          "rawSql": "SELECT count() AS \"Last 1h\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE time >= now() - INTERVAL 1 HOUR",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 203,
+      "type": "stat",
+      "title": "Records Last 5min",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${DS_CLICKHOUSE}"
+      },
+      "gridPos": {
+        "x": 6,
+        "y": 1,
+        "w": 3,
+        "h": 4
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "green"
+          },
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${DS_CLICKHOUSE}"
+          },
+          "rawSql": "SELECT count() AS \"Last 5min\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE time >= now() - INTERVAL 5 MINUTE",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 204,
+      "type": "stat",
+      "title": "Unique Tables Written",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${DS_CLICKHOUSE}"
+      },
+      "gridPos": {
+        "x": 9,
+        "y": 1,
+        "w": 3,
+        "h": 4
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "purple"
+          },
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "purple",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${DS_CLICKHOUSE}"
+          },
+          "rawSql": "SELECT uniq(_table) AS \"Tables\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time)",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 205,
+      "type": "stat",
+      "title": "Unique Agent Pipelines",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${DS_CLICKHOUSE}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 1,
+        "w": 3,
+        "h": 4
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "teal"
+          },
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "teal",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${DS_CLICKHOUSE}"
+          },
+          "rawSql": "SELECT uniq(device_name) AS \"Agents\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time)",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 206,
+      "type": "stat",
+      "title": "Unique OCSF Classes",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${DS_CLICKHOUSE}"
+      },
+      "gridPos": {
+        "x": 15,
+        "y": 1,
+        "w": 3,
+        "h": 4
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "blue"
+          },
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "blue",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${DS_CLICKHOUSE}"
+          },
+          "rawSql": "SELECT uniq(class_name) AS \"Classes\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time)",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 207,
+      "type": "stat",
+      "title": "Events With MITRE IDs",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${DS_CLICKHOUSE}"
+      },
+      "gridPos": {
+        "x": 18,
+        "y": 1,
+        "w": 3,
+        "h": 4
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "dark-red"
+          },
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "dark-red",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${DS_CLICKHOUSE}"
+          },
+          "rawSql": "SELECT countIf(attack_id != '') AS \"With MITRE\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time)",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 208,
+      "type": "stat",
+      "title": "Unmapped Events (class=unknown)",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${DS_CLICKHOUSE}"
+      },
+      "gridPos": {
+        "x": 21,
+        "y": 1,
+        "w": 3,
+        "h": 4
+      },
+      "options": {
+        "reduceOptions": {
+          "values": false,
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": ""
+        },
+        "orientation": "auto",
+        "textMode": "auto",
+        "colorMode": "background",
+        "graphMode": "none",
+        "justifyMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "yellow"
+          },
+          "unit": "short",
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "yellow",
+                "value": null
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${DS_CLICKHOUSE}"
+          },
+          "rawSql": "SELECT countIf(class_name = 'Unknown') AS \"Unmapped\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time)",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 210,
+      "type": "timeseries",
+      "title": "Records Ingested per Interval",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${DS_CLICKHOUSE}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 16,
+        "h": 8
+      },
+      "options": {
+        "tooltip": {
+          "mode": "single"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 15,
+            "gradientMode": "opacity"
+          },
+          "unit": "short"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${DS_CLICKHOUSE}"
+          },
+          "rawSql": "SELECT toStartOfInterval(time, INTERVAL $__interval_s SECOND) AS time, count() AS \"Records/interval\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) GROUP BY time ORDER BY time ASC",
+          "format": 3,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 211,
+      "type": "piechart",
+      "title": "Records per Table",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${DS_CLICKHOUSE}"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 5,
+        "w": 8,
+        "h": 8
+      },
+      "options": {
+        "pieType": "donut",
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "values": [
+            "value",
+            "percent"
+          ]
+        },
+        "displayLabels": [
+          "name"
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${DS_CLICKHOUSE}"
+          },
+          "rawSql": "SELECT _table AS \"Table\", count() AS \"Records\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) GROUP BY _table ORDER BY Records DESC",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2001,
+      "type": "row",
+      "title": "\u2500\u2500 OCSF FIELD COVERAGE & TRANSFORMATION \u2500\u2500",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 13,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 220,
+      "type": "barchart",
+      "title": "OCSF Field Fill Rate (% non-empty)",
+      "description": "Shows how many records have each key OCSF field populated \u2014 confirms transformation quality.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${DS_CLICKHOUSE}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 14,
+        "w": 24,
+        "h": 10
+      },
+      "options": {
+        "orientation": "horizontal",
+        "barRadius": 0.05,
+        "barWidth": 0.8,
+        "stacking": "none",
+        "showValue": "always",
+        "fillOpacity": 75,
+        "tooltip": {
+          "mode": "single"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "thresholds"
+          },
+          "unit": "percent",
+          "min": 0,
+          "max": 100,
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "dark-red",
+                "value": null
+              },
+              {
+                "color": "orange",
+                "value": 50
+              },
+              {
+                "color": "yellow",
+                "value": 75
+              },
+              {
+                "color": "green",
+                "value": 90
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${DS_CLICKHOUSE}"
+          },
+          "rawSql": "SELECT field, fill_pct FROM (SELECT 'class_name' AS field,       round(100*countIf(class_name != '') / count(), 1) AS fill_pct FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) UNION ALL SELECT 'severity',                   round(100*countIf(severity != '') / count(), 1) FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) UNION ALL SELECT 'finding_uid',                round(100*countIf(finding_uid != '') / count(), 1) FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) UNION ALL SELECT 'finding_title',              round(100*countIf(finding_title != '') / count(), 1) FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) UNION ALL SELECT 'wazuh_rule_level',           round(100*countIf(wazuh_rule_level > 0) / count(), 1) FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) UNION ALL SELECT 'device_name',                round(100*countIf(device_name != '') / count(), 1) FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) UNION ALL SELECT 'manager_name',               round(100*countIf(manager_name != '') / count(), 1) FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) UNION ALL SELECT 'activity_name',              round(100*countIf(activity_name != '') / count(), 1) FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) UNION ALL SELECT 'decoder_name',               round(100*countIf(decoder_name != '') / count(), 1) FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) UNION ALL SELECT 'actor_user',                 round(100*countIf(actor_user != '') / count(), 1) FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) UNION ALL SELECT 'src_ip',                     round(100*countIf(src_ip != '') / count(), 1) FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) UNION ALL SELECT 'dst_ip',                     round(100*countIf(dst_ip != '') / count(), 1) FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) UNION ALL SELECT 'file_name',                  round(100*countIf(file_name != '') / count(), 1) FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) UNION ALL SELECT 'attack_id (MITRE)',          round(100*countIf(attack_id != '') / count(), 1) FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) UNION ALL SELECT 'attack_tactic',              round(100*countIf(attack_tactic != '') / count(), 1) FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) UNION ALL SELECT 'pci_dss',                    round(100*countIf(pci_dss != '') / count(), 1) FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) UNION ALL SELECT 'gdpr',                       round(100*countIf(gdpr != '') / count(), 1) FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) UNION ALL SELECT 'hipaa',                      round(100*countIf(hipaa != '') / count(), 1) FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) UNION ALL SELECT 'nist_800_53',                round(100*countIf(nist_800_53 != '') / count(), 1) FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) UNION ALL SELECT 'finding_types (rule groups)',round(100*countIf(finding_types != '') / count(), 1) FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time)) ORDER BY fill_pct DESC",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 221,
+      "type": "timeseries",
+      "title": "OCSF Class Volume Over Time",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${DS_CLICKHOUSE}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 24,
+        "w": 16,
+        "h": 8
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "calcs": [
+            "sum"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 5,
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${DS_CLICKHOUSE}"
+          },
+          "rawSql": "SELECT toStartOfInterval(time, INTERVAL $__interval_s SECOND) AS time, class_name, count() AS events FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) GROUP BY time, class_name ORDER BY time ASC",
+          "format": 3,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 222,
+      "type": "table",
+      "title": "OCSF Class Breakdown",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${DS_CLICKHOUSE}"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 24,
+        "w": 8,
+        "h": 8
+      },
+      "options": {
+        "footer": {
+          "show": false
+        },
+        "showHeader": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Records"
+            },
+            "properties": [
+              {
+                "id": "custom.displayMode",
+                "value": "lcd-gauge"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${DS_CLICKHOUSE}"
+          },
+          "rawSql": "SELECT class_name AS \"OCSF Class\", count() AS \"Records\", round(100*count()/sum(count()) OVER (), 1) AS \"% Total\", uniq(device_name) AS \"Agents\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) GROUP BY class_name ORDER BY Records DESC",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2002,
+      "type": "row",
+      "title": "\u2500\u2500 TRANSFORMATION VALIDATION \u2500\u2500",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 32,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 230,
+      "type": "timeseries",
+      "title": "Unmapped Events Over Time (class=Unknown)",
+      "description": "Spikes indicate new log sources not yet mapped to OCSF classes.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${DS_CLICKHOUSE}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 33,
+        "w": 12,
+        "h": 7
+      },
+      "options": {
+        "tooltip": {
+          "mode": "single"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 20
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "yellow"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${DS_CLICKHOUSE}"
+          },
+          "rawSql": "SELECT toStartOfInterval(time, INTERVAL $__interval_s SECOND) AS time, count() AS \"Unmapped\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) AND class_name = 'Unknown' GROUP BY time ORDER BY time ASC",
+          "format": 3,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 231,
+      "type": "timeseries",
+      "title": "Events Missing severity Field",
+      "description": "Records where severity is empty \u2014 indicates mapping gap.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${DS_CLICKHOUSE}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 33,
+        "w": 12,
+        "h": 7
+      },
+      "options": {
+        "tooltip": {
+          "mode": "single"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom",
+          "showLegend": false
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 20
+          },
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "orange"
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${DS_CLICKHOUSE}"
+          },
+          "rawSql": "SELECT toStartOfInterval(time, INTERVAL $__interval_s SECOND) AS time, count() AS \"Missing Severity\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) AND severity = '' GROUP BY time ORDER BY time ASC",
+          "format": 3,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 232,
+      "type": "piechart",
+      "title": "Severity Value Distribution",
+      "description": "Should show only: Critical, High, Medium, Low, Informational. Other values = mapping bug.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${DS_CLICKHOUSE}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 40,
+        "w": 8,
+        "h": 8
+      },
+      "options": {
+        "pieType": "pie",
+        "tooltip": {
+          "mode": "multi"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "values": [
+            "value",
+            "percent"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${DS_CLICKHOUSE}"
+          },
+          "rawSql": "SELECT if(severity='','(empty)',severity) AS \"Severity\", count() AS \"Count\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) GROUP BY Severity ORDER BY Count DESC",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 233,
+      "type": "table",
+      "title": "class_uid \u2192 class_name Mapping Check",
+      "description": "Validates that OCSF class UIDs are correctly assigned. Mismatches indicate transformation bugs.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${DS_CLICKHOUSE}"
+      },
+      "gridPos": {
+        "x": 8,
+        "y": 40,
+        "w": 8,
+        "h": 8
+      },
+      "options": {
+        "footer": {
+          "show": false
+        },
+        "showHeader": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Count"
+            },
+            "properties": [
+              {
+                "id": "custom.displayMode",
+                "value": "lcd-gauge"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "teal"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${DS_CLICKHOUSE}"
+          },
+          "rawSql": "SELECT class_uid AS \"class_uid\", class_name AS \"class_name\", count() AS \"Count\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) GROUP BY class_uid, class_name ORDER BY Count DESC LIMIT 25",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 234,
+      "type": "table",
+      "title": "Rule Level \u2192 Severity Mapping Check",
+      "description": "Verifies that Wazuh rule levels map to correct OCSF severity strings. Wrong values = bug.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${DS_CLICKHOUSE}"
+      },
+      "gridPos": {
+        "x": 16,
+        "y": 40,
+        "w": 8,
+        "h": 8
+      },
+      "options": {
+        "footer": {
+          "show": false
+        },
+        "showHeader": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Count"
+            },
+            "properties": [
+              {
+                "id": "custom.displayMode",
+                "value": "lcd-gauge"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Rule Level"
+            },
+            "properties": [
+              {
+                "id": "custom.width",
+                "value": 85
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 7
+                    },
+                    {
+                      "color": "orange",
+                      "value": 10
+                    },
+                    {
+                      "color": "dark-red",
+                      "value": 13
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${DS_CLICKHOUSE}"
+          },
+          "rawSql": "SELECT wazuh_rule_level AS \"Rule Level\", severity AS \"Severity\", count() AS \"Count\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) GROUP BY wazuh_rule_level, severity ORDER BY wazuh_rule_level DESC LIMIT 25",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2003,
+      "type": "row",
+      "title": "\u2500\u2500 PER-AGENT INGESTION \u2500\u2500",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 48,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 240,
+      "type": "table",
+      "title": "Per-Agent Ingestion Summary",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${DS_CLICKHOUSE}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 49,
+        "w": 24,
+        "h": 8
+      },
+      "options": {
+        "footer": {
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Records",
+            "desc": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Records"
+            },
+            "properties": [
+              {
+                "id": "custom.displayMode",
+                "value": "lcd-gauge"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "First Seen"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeFromNow"
+              },
+              {
+                "id": "custom.width",
+                "value": 130
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Last Seen"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "dateTimeFromNow"
+              },
+              {
+                "id": "custom.width",
+                "value": 130
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Fields Empty %"
+            },
+            "properties": [
+              {
+                "id": "unit",
+                "value": "percent"
+              },
+              {
+                "id": "custom.width",
+                "value": 110
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "yellow",
+                      "value": 20
+                    },
+                    {
+                      "color": "red",
+                      "value": 50
+                    }
+                  ]
+                }
+              },
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${DS_CLICKHOUSE}"
+          },
+          "rawSql": "SELECT device_name AS \"Agent\", count() AS \"Records\", uniq(class_name) AS \"OCSF Classes\", uniq(finding_uid) AS \"Unique Rules\", uniq(decoder_name) AS \"Decoders\", round(100 * countIf(class_name='Unknown') / count(), 1) AS \"Fields Empty %\", min(time) AS \"First Seen\", max(time) AS \"Last Seen\" FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) GROUP BY device_name ORDER BY Records DESC",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 241,
+      "type": "timeseries",
+      "title": "Records per Agent Over Time",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${DS_CLICKHOUSE}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 57,
+        "w": 24,
+        "h": 8
+      },
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "table",
+          "placement": "right",
+          "showLegend": true,
+          "calcs": [
+            "sum"
+          ]
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 3,
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${DS_CLICKHOUSE}"
+          },
+          "rawSql": "SELECT toStartOfInterval(time, INTERVAL $__interval_s SECOND) AS time, device_name, count() AS records FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) AND device_name IN (SELECT device_name FROM merge('wazuh_ocsf', '^ocsf_.+$') WHERE $__timeFilter(time) GROUP BY device_name ORDER BY count() DESC LIMIT 10) GROUP BY time, device_name ORDER BY time ASC",
+          "format": 3,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 2004,
+      "type": "row",
+      "title": "\u2500\u2500 CLICKHOUSE TABLE HEALTH \u2500\u2500",
+      "collapsed": false,
+      "gridPos": {
+        "x": 0,
+        "y": 65,
+        "w": 24,
+        "h": 1
+      },
+      "panels": []
+    },
+    {
+      "id": 250,
+      "type": "table",
+      "title": "ClickHouse Table Row Counts",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${DS_CLICKHOUSE}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 66,
+        "w": 12,
+        "h": 8
+      },
+      "options": {
+        "footer": {
+          "show": false
+        },
+        "showHeader": true,
+        "sortBy": [
+          {
+            "displayName": "Rows",
+            "desc": true
+          }
+        ]
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Rows"
+            },
+            "properties": [
+              {
+                "id": "custom.displayMode",
+                "value": "lcd-gauge"
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "blue"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${DS_CLICKHOUSE}"
+          },
+          "rawSql": "SELECT name AS \"Table\", formatReadableQuantity(total_rows) AS \"Rows\", formatReadableSize(total_bytes) AS \"Size\", engine AS \"Engine\" FROM system.tables WHERE database = 'wazuh_ocsf' ORDER BY total_rows DESC",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "id": 251,
+      "type": "table",
+      "title": "Recent ClickHouse Errors (system.errors)",
+      "description": "Any errors here may indicate ingestion or schema issues.",
+      "datasource": {
+        "type": "grafana-clickhouse-datasource",
+        "uid": "${DS_CLICKHOUSE}"
+      },
+      "gridPos": {
+        "x": 12,
+        "y": 66,
+        "w": 12,
+        "h": 8
+      },
+      "options": {
+        "footer": {
+          "show": false
+        },
+        "showHeader": true
+      },
+      "fieldConfig": {
+        "defaults": {
+          "custom": {
+            "align": "auto",
+            "filterable": true
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "Count"
+            },
+            "properties": [
+              {
+                "id": "custom.displayMode",
+                "value": "color-background"
+              },
+              {
+                "id": "thresholds",
+                "value": {
+                  "mode": "absolute",
+                  "steps": [
+                    {
+                      "color": "green",
+                      "value": null
+                    },
+                    {
+                      "color": "orange",
+                      "value": 1
+                    },
+                    {
+                      "color": "dark-red",
+                      "value": 10
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "grafana-clickhouse-datasource",
+            "uid": "${DS_CLICKHOUSE}"
+          },
+          "rawSql": "SELECT name AS \"Error Code\", value AS \"Count\", last_error_time AS \"Last Seen\", last_error_message AS \"Last Message\" FROM system.errors ORDER BY last_error_time DESC LIMIT 20",
+          "format": 1,
+          "refId": "A"
+        }
+      ]
+    }
+  ]
+}
