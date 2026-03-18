@@ -4,3 +4,6 @@ state/
 .env
 unmapped_fields.json
 *.bak
+BLOG_MEDIUM.md
+CLIENT_MESSAGE.md
+*.zip
