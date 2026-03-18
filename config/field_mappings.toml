@@ -83,6 +83,24 @@ ocsf_version = "1.7.0"
 #                               win.eventdata.processName / logonType, …
 #   • dpkg / apt audit        : package, version, arch, dpkg_status
 #   • sudo / exec context     : uid, tty, pwd
+#   • AWS CloudTrail          : aws.source_ip_address → src_ip
+#                               aws.additionalEventData.UserName / aws.userIdentity.arn → actor_user
+#                               aws.aws_account_id → domain
+#                               aws.eventType → action  |  aws.eventCategory → app_category
+#                               aws.responseElements.ConsoleLogin / serviceEventDetails.UserAuthentication → status
+#                               aws.errorMessage → status=Failure + extensions.aws_error_message
+#                               aws.tlsDetails.clientProvidedHostHeader → dst_hostname
+#                               aws.additionalEventData.LoginTo → url
+#                               + ~20 extension fields (aws_event_id, aws_region, aws_user_agent,
+#                                 aws_identity_type, aws_mfa_used, tls_version, aws_resource_arn, …)
+#   • Office 365 Audit Log    : office365.ClientIPAddress → src_ip
+#                               office365.Actor[Type=5].ID → actor_user
+#                               office365.Workload / ApplicationDisplayName → app_name
+#                               office365.OrganizationId → domain
+#                               office365.Operation → action
+#                               office365.ResultStatus → status
+#                               + ~25 extension fields (o365_app_id, o365_auth_type,
+#                                 browser_name/version, o365_chat_name, o365_correlation_id, …)
 #
 # Examples (uncomment and adjust for your own decoders):
 # "myapp.client_addr"        = "src_ip"
