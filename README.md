@@ -2,7 +2,7 @@
 
 A production-grade Wazuh → OCSF → ClickHouse pipeline written in Rust.
 
-Reads `alerts.json` exactly like Filebeat reads a log file — tracking inode and byte offset — transforms every alert to the [OCSF 1.7.0](https://github.com/ocsf/ocsf-schema/releases/tag/v1.7.0) schema, and bulk-inserts into ClickHouse. Single 4.1 MB static binary, no JVM, no agents, no Elasticsearch.
+Reads `alerts.json` exactly like Filebeat reads a log file — tracking inode and byte offset — transforms every alert to the [OCSF 1.7.0](https://github.com/ocsf/ocsf-schema/releases/tag/v1.7.0) schema, and bulk-inserts into ClickHouse. Single 4.2 MB static binary, no JVM, no agents, no Elasticsearch.
 
 ```
 Wazuh manager
@@ -26,7 +26,7 @@ This pipeline replaces the entire Elastic stack with a single binary:
 |---|---|
 | Raw Wazuh JSON — no schema, no standardisation | **OCSF 1.7.0** — every event gets `src_ip`, `actor_user`, `class_uid`, … in a vendor-neutral standard |
 | Elasticsearch needs a JVM + 16–64 GB RAM | **ClickHouse** handles millions of events on 2 GB RAM |
-| Filebeat → Logstash → Elasticsearch pipeline — 5 components | **One 4.1 MB static binary** — no JVM, no Kafka, no agents |
+| Filebeat → Logstash → Elasticsearch pipeline — 5 components | **One 4.2 MB static binary** — no JVM, no Kafka, no agents |
 | Schema drift breaks Kibana dashboards on every rule change | Hot-reloadable `field_mappings.toml` — no restart required |
 | Data loss on crash (Filebeat loses in-flight lines) | Inode + byte-offset state survives restarts and log rotation |
 | Wazuh alerts locked in Elastic — no easy cross-vendor correlation | OCSF standard means Wazuh alerts can be JOINed with CrowdStrike, AWS CloudTrail, Okta and any other OCSF source |
@@ -35,7 +35,7 @@ This pipeline replaces the entire Elastic stack with a single binary:
 
 | Solution | RAM needed | Schema standard | Config reload | Binary size |
 |---|---|---|---|---|
-| **This tool** | ~50 MB | OCSF 1.7.0 (latest) | Yes — 10 s | 4.1 MB |
+| **This tool** | ~50 MB | OCSF 1.7.0 (latest) | Yes — 10 s | 4.2 MB |
 | Wazuh + Elasticsearch stack | 16–64 GB (JVM) | None (raw JSON) | No — restart | N/A |
 | Wazuh + Logstash pipeline | 4–8 GB (JVM) | Custom only | No — restart | N/A |
 | Splunk forwarder | 4–8 GB | Partial | No | N/A |
@@ -77,7 +77,8 @@ A full GitHub search across `wazuh+ocsf+clickhouse`, `siem+ocsf+clickhouse`, and
 16. [Wazuh rule fields in ClickHouse](#16-wazuh-rule-fields-in-clickhouse)
 17. [Wazuh cluster deployment](#17-wazuh-cluster-deployment)
 18. [OCSF schema validation](#18-ocsf-schema-validation)
-19. [Field standardisation: 1,108 decoder fields → 29 OCSF columns](#19-field-standardisation-1108-decoder-fields--29-ocsf-columns)
+19. [Field standardisation: 1,200+ decoder fields → 29 OCSF columns](#19-field-standardisation-1200-decoder-fields--29-ocsf-columns)
+20. [Field mapping reference for Grafana dashboards](#20-field-mapping-reference-for-grafana-dashboards)
 
 ---
 
@@ -111,13 +112,13 @@ Then restart: `systemctl restart wazuh-manager`
 # Clone / copy source
 cd /root/rust-ocsf
 
-# Release build (optimised, ~4.1 MB)
+# Release build (optimised, ~4.2 MB)
 cargo build --release
 
 # Binary location
 ls -lh target/release/wazuh-ocsf-etl
 
-# Run the test suite (114 unit tests)
+# Run the test suite (119 unit tests)
 cargo test
 ```
 
@@ -653,11 +654,19 @@ The decoder name and rule groups are checked to assign the correct OCSF class, o
 |---|---|---|---|
 | AWS VPC Flow Logs | decoder `aws-vpcflow`, `vpc-flow*` | **4001** | Network Activity |
 | AWS GuardDuty | decoder `aws-guardduty` or group `amazon-guardduty` | **2002** | Vulnerability Finding |
+| AWS Inspector / Macie | group `amazon-inspector`, `amazon-macie` | **2002** | Vulnerability Finding |
+| AWS Config | group `amazon-config` | **2003** | Compliance Finding |
+| AWS WAF / ALB / S3 | group `amazon-waf`, `amazon-alb`, `amazon-s3` | **4002** | HTTP Activity |
+| AWS Security Hub | decoder `aws-securityhub` | **2002** | Vulnerability Finding |
+| AWS CloudTrail (IAM) | decoder `cloudtrail` AND group `aws_iam` or `authentication` | **3002** | Authentication |
+| GCP Cloud Logging | decoder `gcp-pubsub`, `gcp_pubsub` or group `gcp` | **4001** | Network Activity |
+| Microsoft Graph Security | decoder `ms-graph` | **2002** | Vulnerability Finding |
+| Cloudflare WAF | decoder contains `cloudflare`; group `WAFAction` | **4002** | HTTP Activity |
 | Okta System Log | decoder `okta` or group `okta` | **3002** | Authentication |
 | Azure AD / Monitor | decoder `azure-ad`, `azure_ad` or group `azure-ad` | **3002** | Authentication |
 | OneLogin | decoder `onelogin` or group `onelogin` | **3002** | Authentication |
 | Zeek / Bro | decoder `zeek`, `bro-ids` or group `zeek`, `bro` | **4001** | Network Activity |
-| AWS CloudTrail (IAM) | decoder `cloudtrail` AND group `aws_iam` or `authentication` | **3002** | Authentication |
+| Docker | decoder `docker` or group `docker` | **4001** | Network Activity |
 
 ### Automatic field extraction
 
@@ -665,18 +674,89 @@ All vendor-specific field paths are built into the static lookup tables — no T
 
 | OCSF column | Cloud field paths auto-resolved |
 |---|---|
-| `src_ip` | `srcAddr` (VPC Flow), `okta.client.ipAddress`, `azure.callerIpAddress`, `azure.properties.ipAddress`, `zeek.id.orig_h`, GuardDuty `remoteIpDetails.ipAddressV4` |
+| `src_ip` | `srcAddr` (VPC Flow), `okta.client.ipAddress`, `azure.callerIpAddress`, `azure.properties.ipAddress`, `zeek.id.orig_h`, GuardDuty `remoteIpDetails.ipAddressV4`, `gcp.protoPayload.requestMetadata.callerIp`, `ClientIP` (Cloudflare) |
 | `dst_ip` | `dstAddr` (VPC Flow), `zeek.id.resp_h`, GuardDuty `localIpDetails.ipAddressV4` |
 | `src_port` | `srcPort` (VPC Flow, numeric), `zeek.id.orig_p`, GuardDuty `remotePortDetails.port` |
 | `dst_port` | `dstPort` (VPC Flow, numeric), `zeek.id.resp_p`, GuardDuty `localPortDetails.port` |
-| `actor_user` | `okta.actor.alternateId`, `okta.actor.displayName`, `azure.properties.userPrincipalName`, `aws.userIdentity.userName` |
-| `action` | `okta.displayMessage`, `okta.eventType`, `azure.operationName`, `aws.eventName` |
-| `status` | `okta.outcome.result` (SUCCESS/FAILURE/ALLOW/DENY), `azure.resultType`, `audit.res` |
+| `actor_user` | `okta.actor.alternateId`, `okta.actor.displayName`, `azure.properties.userPrincipalName`, `aws.userIdentity.userName`, `gcp.protoPayload.authenticationInfo.principalEmail`, `office365.UserId`, `ms-graph.userPrincipalName` |
+| `action` | `okta.displayMessage`, `okta.eventType`, `azure.operationName`, `aws.eventName`, `gcp.protoPayload.methodName`, `docker.Action`, `WAFAction` (Cloudflare) |
+| `status` | `okta.outcome.result` (SUCCESS/FAILURE/ALLOW/DENY), `azure.resultType`, `audit.res`, `ms-graph.status`, `docker.status`, `aws.finding.Compliance.Status` |
 | `bytes_in` | `aws.bytes` (VPC Flow), `aws.additionalEventData.bytesTransferredIn` (CloudTrail S3) |
 | `interface_in` | `interfaceId` (VPC Flow ENI), `zeek._path` |
-| `app_name` | `aws.eventSource`, `azure.resourceType`, `okta.client.userAgent.browser` |
+| `app_name` | `aws.eventSource`, `azure.resourceType`, `okta.client.userAgent.browser`, `gcp.resource.type`, `metadata.product.name` (Amazon Security Lake), `ms-graph.detectionSource`, `docker.Actor.Attributes.name` |
+| `severity` | Numeric GuardDuty finding severity (0–10 → OCSF 1–5), string Inspector/Macie labels (Low/Medium/High/Critical), GCP 8-tier labels (EMERGENCY/ALERT/CRITICAL/ERROR/WARNING/NOTICE/INFO/DEBUG), Docker container status, MS Graph alert severity |
+| `url` | `gcp.protoPayload.resourceName`, `aws.requestParameters.url`, `vulnerability.reference` |
+| `domain` | `gcp.resource.labels.project_id`, `aws.userIdentity.accountId`, `azure.tenantId`, `github.org`, `office365.OrganizationName` |
+| `rule_name` | `aws.title` (GuardDuty/Inspector finding title), `aws.finding.Compliance.SecurityControlId`, `ms-graph.title`, `threat.software.id` |
 
 > **Numeric fields are handled correctly.** When the JSON decoder emits ports or byte counts as numbers (e.g. `"srcPort": 45678`), the pipeline converts them to the appropriate typed column. This covers all VPC Flow and Zeek numeric fields.
+
+### Cloud / vendor source field extraction (natively extracted — zero config)
+
+The pipeline contains dedicated extraction blocks for each of the following vendor sources. No `field_mappings.toml` entries are required.
+
+#### AWS (all 10+ sources)
+
+| Source | Native extraction covers |
+|---|---|
+| CloudTrail | `userIdentity.userName/arn`, `eventName`, `errorCode`, `sourceIPAddress`, `requestParameters.*` |
+| GuardDuty | Finding severity (numeric 0–10), title, type, `remoteIpDetails.ipAddressV4`, `localIpDetails.ipAddressV4` |
+| Inspector / Macie | Severity label, finding title, `assetAttributes.hostname` |
+| VPC Flow Logs | `srcaddr`, `dstaddr`, `srcport`, `dstport`, `protocol`, `bytes`, `action`, `interfaceId` |
+| WAF | `httpRequest.clientIp`, `httpRequest.uri`, `httpRequest.httpMethod`, `webaclId`, `action` |
+| ALB / ELB | `clientIp`, `targetIp`, `requestUrl`, `requestProcessingTime`, `elb_status_code`, `sentBytes`, `receivedBytes` |
+| S3 Server Access | `remoteip`, `requester`, `key`, `operation`, `httpStatus`, `bytesSent`, `request_uri` |
+| Config | `awsAccountId`, `resourceType`, `resourceId`, `configurationItemStatus`, `configuration.complianceType` |
+| Security Hub | `finding.Title`, `finding.ProductName`, `finding.Compliance.Status`, `finding.RecordState`, `finding.Compliance.SecurityControlId` |
+| Trusted Advisor | `check-name`, `status`, `resourceId` |
+| KMS | `requestParameters.keyId`, `errorCode` |
+
+#### GCP Cloud Logging
+
+| GCP field | OCSF column |
+|---|---|
+| `protoPayload.authenticationInfo.principalEmail` | `actor_user` |
+| `protoPayload.requestMetadata.callerIp` | `src_ip` |
+| `protoPayload.methodName` | `action` |
+| `protoPayload.resourceName` | `url` |
+| `resource.labels.project_id` | `domain` |
+| `severity` (EMERGENCY/ALERT/CRITICAL/ERROR/WARNING/NOTICE/INFO/DEBUG) | `severity` / `severity_id` override |
+
+#### Docker
+
+| Docker field | OCSF column |
+|---|---|
+| `docker.Action` | `action` |
+| `docker.Type` | `app_category` |
+| `docker.Actor.Attributes.name` | `app_name` |
+| `docker.level` (`error`/`warning`/`info`) | `severity` / `severity_id` override |
+| `docker.Actor.Attributes.role.new` / `role.old` | `extensions.docker_role_new` / `docker_role_old` |
+
+#### Microsoft Graph Security
+
+| MS Graph field | OCSF column |
+|---|---|
+| `ms-graph.severity` | `severity` / `severity_id` override |
+| `ms-graph.title` | `rule_name` |
+| `ms-graph.category` | `app_category` |
+| `ms-graph.status` | `status` |
+| `ms-graph.detectionSource` / `serviceSource` | `app_name` |
+
+#### Office365
+
+| Office365 field | OCSF column | Notes |
+|---|---|---|
+| `office365.UserId` | `actor_user` | User performing the action |
+| `office365.ClientIP` / `ClientIPAddress` | `src_ip` | Connecting client IP |
+| `office365.Operation` | `action` | Operation performed |
+| `office365.OrganizationName` / `OrganizationId` | `domain` | Tenant name / UUID |
+| `office365.Workload` / `ApplicationDisplayName` | `app_name` | Exchange / SharePoint / Teams / … |
+| `office365.ObjectId` / `SiteUrl` | `url` | Affected resource URL |
+| `office365.ResultStatus` | `status` | Succeeded / Failed / PartiallySucceeded |
+| `office365.InternalLogonType` | `app_category` | Exchange logon classification integer (0=Owner, 1=Delegate, 2=Admin) |
+| `office365.LogonType` | `app_category` | Azure AD logon type integer — same concept as `win.eventdata.logonType` |
+
+---
 
 ### Standard Wazuh module fields (natively extracted — zero config)
 
@@ -1491,20 +1571,20 @@ At 10,000 EPS the validator adds roughly 0–1 µs per event (all hot-cache inte
 
 ---
 
-## 19. Field standardisation: 1,108 decoder fields → 29 OCSF columns
+## 19. Field standardisation: 1,200+ decoder fields → 29 OCSF columns
 
-Wazuh ships with **120 decoder files** covering over 300 distinct log sources (Linux syslog, Windows Event Log, Cisco, Palo Alto, Fortinet, AWS, Okta, Zeek, Suricata, and many more). Together they produce **1,108 unique field names** across all sources — no two vendors agree on naming.
+Wazuh ships with **171 decoder files** covering over 300 distinct log sources (Linux syslog, Windows Event Log, Cisco, Palo Alto, Fortinet, AWS, GCP, Okta, Zeek, Suricata, Docker, MS Graph, Office365, and many more). Together they produce over **1,200 unique field names** across all sources — no two vendors agree on naming.
 
-This pipeline consolidates all 1,108 names to **29 typed OCSF ClickHouse columns** through the field resolver (`src/field_paths.rs`), which holds **417 source-name variants** mapped to those 29 targets. Zero data is lost — the 835 vendor-opaque fields that have no OCSF equivalent are written to the `event_data` JSON column intact.
+This pipeline consolidates all field names to **29 typed OCSF ClickHouse columns** through the field resolver (`src/field_paths.rs`), which holds **567 source-name variants** (audited from all 171 decoder files and all 171 rule files) mapped to those 29 targets. Zero data is lost — vendor-opaque fields that have no OCSF equivalent are written to the `extensions` JSON column intact.
 
 ### Coverage summary
 
 | Source diversity | After pipeline |
 |---|---|
-| 1,108 unique Wazuh decoder field names | 29 typed OCSF columns |
-| 120 decoder files, 300+ log sources | Every record has the same schema |
-| 417 source-field variants resolved | 835 vendor-opaque fields → `event_data` blob |
-| 22.9 % of decoder fields standardised | 100 % of data preserved |
+| 1,200+ unique Wazuh decoder field names | 29 typed OCSF columns |
+| 171 decoder files + 171 rule files audited | Every record has the same schema |
+| 567 source-field variants resolved | All remaining fields → `extensions` blob |
+| ~47 % of decoder fields standardised | 100 % of data preserved |
 
 ### Consolidation ratio per column
 
@@ -1512,24 +1592,60 @@ The columns with the highest incoming-variant count — all collapsed to one sta
 
 | OCSF column | Input variants → 1 | Example original field names |
 |---|---|---|
-| `src_ip` | 44 → 1 | `srcip`, `src_ip`, `IP`, `client`, `aws.sourceIPAddress`, `zeek.id.orig_h`, `okta.client.ipAddress`, `Initiator` |
-| `actor_user` | 42 → 1 | `user`, `srcuser`, `username`, `audit.auid`, `aws.userIdentity.userName`, `okta.actor.alternateId`, `account`, `admin` |
-| `status` | 23 → 1 | `status`, `result`, `event.severity`, `reason`, `severity`, `okta.outcome.result`, `audit.success`, `error` |
+| `src_ip` | 47 → 1 | `srcip`, `src_ip`, `IP`, `client`, `aws.sourceIPAddress`, `zeek.id.orig_h`, `okta.client.ipAddress`, `gcp.protoPayload.requestMetadata.callerIp`, `ClientIP`, `botnetip` |
+| `actor_user` | 46 → 1 | `user`, `srcuser`, `username`, `audit.auid`, `aws.userIdentity.userName`, `okta.actor.alternateId`, `gcp.protoPayload.authenticationInfo.principalEmail`, `identity.user.name`, `win.eventdata.subjectAccountName` |
+| `status` | 53 → 1 | `status`, `result`, `event.severity`, `reason`, `okta.outcome.result`, `audit.success`, `sca.check.result`, `virustotal.malicious`, `aws.finding.Compliance.Status`, `win.eventdata.errorCode`, `rcode`, `office365.ResultStatus` |
+| `action` | 34 → 1 | `action`, `act`, `aws.eventName`, `gcp.protoPayload.methodName`, `azure.operationName`, `okta.eventType`, `office365.Operation`, `docker.Action`, `api.operation`, `operationName`, `audit.op`, `utmaction`, `WAFAction` |
 | `dst_ip` | 20 → 1 | `dstip`, `dst_ip`, `aws.responseElements.ipAddress`, `zeek.id.resp_h`, `destinationIp` |
 | `src_port` | 14 → 1 | `srcport`, `src_port`, `zeek.id.orig_p`, `data.sport` |
 | `dst_port` | 14 → 1 | `dstport`, `dst_port`, `zeek.id.resp_p`, `data.dport` |
-| `app_name` | 13 → 1 | `program`, `app`, `product.name`, `module`, `vulnerability.package.name`, `win.system.providerName` |
-| `file_path` | 12 → 1 | `syscheck.path`, `sysmon.targetFilename`, `audit.file.name`, `object`, `url_filename` |
-| `process_name` | 10 → 1 | `process.name`, `sysmon.image`, `audit.exe`, `win.eventdata.processName` |
+| `app_name` | 33 → 1 | `program`, `app`, `module`, `win.system.providerName`, `win.system.channel`, `metadata.product.name`, `mongodb.component`, `aws.finding.ProductName`, `ms-graph.detectionSource`, `office365.Workload`, `docker.Actor.Attributes.name` |
+| `file_name` | 29 → 1 | `syscheck.path`, `sysmon.targetFilename`, `audit.file.name`, `object`, `win.eventdata.targetFileName`, `win.eventdata.imageLoaded`, `audit.directory.name`, `cylance_threats.file_path`, `infected_file_path` |
+| `process_name` | 16 → 1 | `process.name`, `sysmon.image`, `audit.exe`, `win.eventdata.commandLine`, `win.eventdata.imagePath`, `audit.execve.a0`, `parameters.program` |
+| `app_category` | 29 → 1 | `category`, `subtype`, `aws.type`, `aws.resourceType`, `sca.type`, `win.eventdata.logonType`, `event.type`, `event_type`, `subcategory`, `aws.userIdentity.type`, `office365.InternalLogonType`, `office365.LogonType` |
+| `rule_name` | 16 → 1 | `rule_name`, `ThreatName`, `aws.title`, `aws.check-name`, `qualysguard.vulnerability_title`, `aws.finding.Compliance.SecurityControlId`, `threat.software.id`, `virus`, `defender.name` |
 
 ### Verified against OCSF 1.7.0
 
-All 835 fields left in `event_data` were checked against the complete OCSF 1.7.0 attribute dictionary across all 31 classes and `base_event`. None of them have an equivalent typed OCSF column — they are legitimately vendor-opaque identifiers, internal codes, and platform-specific metrics. Storing them in `event_data` is correct per the OCSF extensibility model (§ "Profiles & Extensions").
+All remaining fields left in `extensions` were checked against the complete OCSF 1.7.0 attribute dictionary across all 31 classes and `base_event`. None of them have an equivalent typed OCSF column — they are legitimately vendor-opaque identifiers, internal codes, and platform-specific metrics. Storing them in `extensions` is correct per the OCSF extensibility model (§ "Profiles & Extensions").
+
+The 567 path variants were derived by auditing:
+- All **171 Wazuh decoder XML files** (`<order>` tag fields from `/var/ossec/ruleset/decoders/`)
+- All **171 Wazuh rule XML files** (`<field name="...">` conditions from `/var/ossec/ruleset/rules/`)
+- Cloud vendor SDK docs for AWS, GCP, Azure, Office365, MS Graph, Okta, Zeek, and Suricata
+- Cloudflare WAF, Docker event log, Amazon Security Lake OCSF-native relay fields
+
+### OCSF 1.7.0 compliance audit — 7 field corrections
+
+All 29 extraction arrays were audited against the OCSF 1.7.0 attribute dictionary. Seven fields were found in semantically-incorrect arrays and were relocated:
+
+| Field | Was in | Moved to | OCSF rationale |
+|---|---|---|---|
+| `api.operation` | `HTTP_METHOD` | `ACTION` | `http_method` accepts HTTP verbs only (GET/POST/…). Operation names are `activity_name`-equivalent → `action`. |
+| `operationName` | `HTTP_METHOD` | `ACTION` | Same — Azure/generic operation names are not HTTP verbs. |
+| `aws.userIdentity.type` | `APP_NAME` | `CATEGORY` | Represents OCSF `actor.user.type` (IAMUser/AssumedRole/AWSService) — an identity classification, not a product name. |
+| `virus` | `FILE_NAME` | `RULE_NAME` | ClamAV virus names (e.g. `Eicar-Signature`) are `malware.name`-class identifiers, not file paths. |
+| `defender.name` | `FILE_NAME` | `RULE_NAME` | Windows Defender threat names (e.g. `Trojan:Win32/Emotet`) are `malware.name`-class identifiers, not file paths. |
+| `office365.InternalLogonType` | `STATUS` | `CATEGORY` | Logon type is an event classification integer, not an outcome/result string. |
+| `office365.LogonType` | `STATUS` | `CATEGORY` | Same — grouped with the already-correct `win.eventdata.logonType` in `CATEGORY`. |
 
 ### Adding more mappings
 
-Promote any field from `event_data` to a typed column either:
+Promote any field from `extensions` to a typed column either:
 - **At runtime** via `config/field_mappings.toml` — hot-reloaded within 10 s, no restart. See [§9](#9-custom-field-mappings).
 - **At compile time** — add a source variant to the appropriate constant in `src/field_paths.rs` and rebuild.
 
 Use the unmapped-field report ([§11](#11-unmapped-field-discovery)) to identify the highest-frequency unmapped fields from live traffic before deciding which to promote.
+
+---
+
+## 20. Field mapping reference for Grafana dashboards
+
+A comprehensive per-column and per-source mapping table is maintained in [`FIELD_MAPPINGS.md`](FIELD_MAPPINGS.md). It covers:
+
+- Every typed ClickHouse column (name, type, OCSF path, source fields grouped by vendor)
+- Per-source mapping tables for: Generic Wazuh, Windows Event Log, AWS (CloudTrail / VPC Flow / GuardDuty / more), Office365, GCP / Azure / Okta, Zeek / Suricata, and Vulnerability Detector
+- Predefined `extensions` JSON keys (Windows, SCA, FIM, dpkg, AWS, and Office365 sub-fields)
+- Sample Grafana SQL panel queries for the most common SOC dashboard panels
+
+This is the recommended starting point for building any Grafana dashboard against the `wazuh_ocsf` database.

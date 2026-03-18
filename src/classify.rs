@@ -46,13 +46,34 @@ pub(crate) fn classify_event(groups: &[&str], decoder: &str, location: &str) -> 
     let loc = location.to_ascii_lowercase();
 
     // ── Cloud / Integration sources ──────────────────────────────────────
-    if dec.contains("vpcflow") || dec.contains("vpc-flow") || g("amazon-vpcflow") {
+    if dec.contains("vpcflow") || dec.contains("vpc-flow")
+        || g("amazon-vpcflow") || g("aws_vpcflow")
+    {
         return cls!(4001, "Network Activity", 4, "Network Activity");
     }
     if dec.contains("guardduty") || dec.contains("guard-duty")
         || g("amazon-guardduty") || g("aws-guardduty")
     {
         return cls!(2002, "Vulnerability Finding", 2, "Findings");
+    }
+    // AWS Inspector and Macie generate security findings → Vulnerability Finding
+    if g("aws_inspector") || g("aws_macie") {
+        return cls!(2002, "Vulnerability Finding", 2, "Findings");
+    }
+    // AWS Config generates compliance findings
+    if g("aws_config") {
+        return cls!(2003, "Compliance Finding", 2, "Findings");
+    }
+    // AWS WAF and ALB produce HTTP-layer events
+    if g("aws_waf") {
+        return cls!(4002, "HTTP Activity", 4, "Network Activity");
+    }
+    if g("aws_alb") || g("aws_elb") {
+        return cls!(4002, "HTTP Activity", 4, "Network Activity");
+    }
+    // AWS S3 Server Access Logs → HTTP Activity
+    if g("aws_s3") || g("s3") {
+        return cls!(4002, "HTTP Activity", 4, "Network Activity");
     }
     if dec.contains("okta") || dec.contains("azure-ad") || dec.contains("azure_ad")
         || dec.contains("azure-active") || dec.contains("onelogin")
@@ -94,6 +115,10 @@ pub(crate) fn classify_event(groups: &[&str], decoder: &str, location: &str) -> 
     if ga(&["oscap", "sca", "ciscat"]) {
         return cls!(2003, "Compliance Finding", 2, "Findings");
     }
+    // MS Graph Security (Microsoft 365 Defender) — produces security alert findings
+    if dec.contains("ms-graph") || dec.contains("ms_graph") || g("ms-graph") {
+        return cls!(2002, "Vulnerability Finding", 2, "Findings");
+    }
 
     // ── Cat 3: Identity & Access Management ─────────────────────────────
     if ga(&["adduser", "addgroup", "userdel", "groupdel", "usermod",
@@ -118,6 +143,10 @@ pub(crate) fn classify_event(groups: &[&str], decoder: &str, location: &str) -> 
     }
     if g("dhcp") || dec.contains("dhcp") {
         return cls!(4004, "DHCP Activity", 4, "Network Activity");
+    }
+    // Cloudflare WAF rules produce HTTP-level events
+    if dec.contains("cloudflare") || g("WAF") || g("Cloudflare") || g("cloudflare") {
+        return cls!(4002, "HTTP Activity", 4, "Network Activity");
     }
     if ga(&["web", "web-log", "web_accesslog", "web_attack",
             "apache", "nginx", "iis", "squid", "haproxy"])

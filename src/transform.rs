@@ -321,6 +321,768 @@ pub(crate) fn transform(
     if let Some(s) = data_val.get("uid").and_then(Value::as_str) { if !s.is_empty() { extensions.insert("actor_uid".into(),   Value::String(s.to_string())); } }
     if let Some(s) = data_val.get("tty").and_then(Value::as_str) { if !s.is_empty() { extensions.insert("tty".into(),         Value::String(s.to_string())); } }
     if let Some(s) = data_val.get("pwd").and_then(Value::as_str) { if !s.is_empty() { extensions.insert("working_dir".into(), Value::String(s.to_string())); } }
+
+    // ── AWS CloudTrail / AWS integration (data.aws.*) ─────────────────────
+    // Natively extracted — no field_mappings.toml entry required.
+    // Covers CloudTrail management/data events forwarded via Wazuh's
+    // aws-cloudtrail decoder (integration = "aws").
+    if let Some(aws) = data_val.get("aws").and_then(Value::as_object) {
+        macro_rules! aws_str {
+            ($obj:expr, $key:expr) => {
+                $obj.get($key).and_then(Value::as_str).unwrap_or("")
+            };
+        }
+        macro_rules! aws_ext {
+            ($key:expr, $ext:expr) => {
+                let _v = aws_str!(aws, $key);
+                if !_v.is_empty() { extensions.insert($ext.into(), Value::String(_v.to_string())); }
+            };
+        }
+
+        // src_ip: source_ip_address (snake_case variant; also covered by field_paths)
+        if src_ip.is_empty() {
+            let v = aws_str!(aws, "source_ip_address");
+            if !v.is_empty() { src_ip = v.to_string(); }
+        }
+        // actor_user: additionalEventData.UserName (human email) → userIdentity.arn
+        if actor_user.is_empty() {
+            if let Some(aed) = aws.get("additionalEventData").and_then(Value::as_object) {
+                let v = aws_str!(aed, "UserName");
+                if !v.is_empty() { actor_user = v.to_string(); }
+            }
+        }
+        if actor_user.is_empty() {
+            if let Some(uid) = aws.get("userIdentity").and_then(Value::as_object) {
+                let v = aws_str!(uid, "arn");
+                if !v.is_empty() { actor_user = v.to_string(); }
+            }
+        }
+        // domain: AWS account ID
+        if domain.is_empty() {
+            let v = aws_str!(aws, "aws_account_id");
+            if !v.is_empty() { domain = v.to_string(); }
+        }
+        // action: eventType (e.g. "AwsApiCall", "AwsConsoleAction", "AwsServiceEvent")
+        if action.is_empty() {
+            let v = aws_str!(aws, "eventType");
+            if !v.is_empty() { action = v.to_string(); }
+        }
+        // app_category: eventCategory (e.g. "Management", "Data")
+        if app_category.is_empty() {
+            let v = aws_str!(aws, "eventCategory");
+            if !v.is_empty() { app_category = v.to_string(); }
+        }
+        // dst_hostname: TLS client-provided host header (the AWS service endpoint)
+        if dst_hostname.is_empty() {
+            if let Some(tls) = aws.get("tlsDetails").and_then(Value::as_object) {
+                let v = aws_str!(tls, "clientProvidedHostHeader");
+                if !v.is_empty() { dst_hostname = v.to_string(); }
+            }
+        }
+        // url: additionalEventData.LoginTo (console SSO redirect URL)
+        if url.is_empty() {
+            if let Some(aed) = aws.get("additionalEventData").and_then(Value::as_object) {
+                let v = aws_str!(aed, "LoginTo");
+                if !v.is_empty() { url = v.to_string(); }
+            }
+        }
+        // status: ConsoleLogin → UserAuthentication → responseElements.status
+        if status.is_empty() {
+            if let Some(re) = aws.get("responseElements").and_then(Value::as_object) {
+                let v = aws_str!(re, "ConsoleLogin");
+                if !v.is_empty() { status = v.to_string(); }
+            }
+        }
+        if status.is_empty() {
+            if let Some(sed) = aws.get("serviceEventDetails").and_then(Value::as_object) {
+                let v = aws_str!(sed, "UserAuthentication");
+                if !v.is_empty() { status = v.to_string(); }
+            }
+        }
+        if status.is_empty() {
+            if let Some(re) = aws.get("responseElements").and_then(Value::as_object) {
+                let v = aws_str!(re, "status");
+                if !v.is_empty() { status = v.to_string(); }
+            }
+        }
+        // errorMessage present only on failed API calls — backfill status = Failure
+        {
+            let v = aws_str!(aws, "errorMessage");
+            if !v.is_empty() {
+                if status.is_empty() { status = "Failure".to_string(); }
+                extensions.insert("aws_error_message".into(), Value::String(v.to_string()));
+            }
+        }
+
+        // Event / request metadata
+        aws_ext!("eventID",                  "aws_event_id");
+        aws_ext!("requestID",                "aws_request_id");
+        aws_ext!("awsRegion",                "aws_region");
+        aws_ext!("userAgent",                "aws_user_agent");
+        aws_ext!("recipientAccountId",       "aws_recipient_account_id");
+        aws_ext!("sharedEventID",            "aws_shared_event_id");
+        aws_ext!("managementEvent",          "aws_management_event");
+        aws_ext!("readOnly",                 "aws_read_only");
+        aws_ext!("sessionCredentialFromConsole", "aws_session_from_console");
+        aws_ext!("source",                   "aws_source");
+        aws_ext!("eventVersion",             "aws_event_version");
+
+        // userIdentity sub-fields
+        if let Some(uid) = aws.get("userIdentity").and_then(Value::as_object) {
+            macro_rules! uid_ext {
+                ($key:expr, $ext:expr) => {
+                    let _v = aws_str!(uid, $key);
+                    if !_v.is_empty() { extensions.insert($ext.into(), Value::String(_v.to_string())); }
+                };
+            }
+            uid_ext!("type",        "aws_identity_type");
+            uid_ext!("invokedBy",   "aws_invoked_by");
+            uid_ext!("accessKeyId", "aws_access_key_id");
+            uid_ext!("credentialId","aws_credential_id");
+        }
+
+        // additionalEventData sub-fields
+        if let Some(aed) = aws.get("additionalEventData").and_then(Value::as_object) {
+            macro_rules! aed_ext {
+                ($key:expr, $ext:expr) => {
+                    let _v = aws_str!(aed, $key);
+                    if !_v.is_empty() { extensions.insert($ext.into(), Value::String(_v.to_string())); }
+                };
+            }
+            aed_ext!("MFAUsed",        "aws_mfa_used");
+            aed_ext!("CredentialType", "aws_credential_type");
+            aed_ext!("AuthWorkflowID", "aws_auth_workflow_id");
+            aed_ext!("MobileVersion",  "aws_mobile_version");
+            aed_ext!("keyMaterialId",  "aws_key_material_id");
+        }
+
+        // tlsDetails sub-fields
+        if let Some(tls) = aws.get("tlsDetails").and_then(Value::as_object) {
+            macro_rules! tls_ext {
+                ($key:expr, $ext:expr) => {
+                    let _v = aws_str!(tls, $key);
+                    if !_v.is_empty() { extensions.insert($ext.into(), Value::String(_v.to_string())); }
+                };
+            }
+            tls_ext!("tlsVersion",             "tls_version");
+            tls_ext!("cipherSuite",            "tls_cipher_suite");
+            tls_ext!("keyExchange",            "tls_key_exchange");
+        }
+
+        // resources sub-fields
+        if let Some(res) = aws.get("resources").and_then(Value::as_object) {
+            macro_rules! res_ext {
+                ($key:expr, $ext:expr) => {
+                    let _v = aws_str!(res, $key);
+                    if !_v.is_empty() { extensions.insert($ext.into(), Value::String(_v.to_string())); }
+                };
+            }
+            res_ext!("ARN",       "aws_resource_arn");
+            res_ext!("type",      "aws_resource_type");
+            res_ext!("accountId", "aws_resource_account_id");
+        }
+
+        // requestParameters.keyId (KMS key ARN used for encryption operations)
+        if let Some(rp) = aws.get("requestParameters").and_then(Value::as_object) {
+            let v = aws_str!(rp, "keyId");
+            if !v.is_empty() { extensions.insert("aws_kms_key_id".into(), Value::String(v.to_string())); }
+        }
+
+        // serviceEventDetails sub-fields
+        if let Some(sed) = aws.get("serviceEventDetails").and_then(Value::as_object) {
+            macro_rules! sed_ext {
+                ($key:expr, $ext:expr) => {
+                    let _v = aws_str!(sed, $key);
+                    if !_v.is_empty() { extensions.insert($ext.into(), Value::String(_v.to_string())); }
+                };
+            }
+            sed_ext!("state",                  "aws_service_state");
+            sed_ext!("CredentialChallenge",    "aws_credential_challenge");
+            sed_ext!("CredentialVerification", "aws_credential_verification");
+            sed_ext!("backupVaultName",        "aws_backup_vault_name");
+            sed_ext!("resourceType",           "aws_service_resource_type");
+        }
+
+        // log_info sub-fields (S3 source file for batch-ingested CloudTrail logs)
+        if let Some(li) = aws.get("log_info").and_then(Value::as_object) {
+            let v = aws_str!(li, "log_file"); if !v.is_empty() { extensions.insert("aws_log_file".into(),     Value::String(v.to_string())); }
+            let v = aws_str!(li, "s3bucket"); if !v.is_empty() { extensions.insert("aws_log_s3bucket".into(), Value::String(v.to_string())); }
+        }
+
+        // ── Per-source handling (severity overrides, extensions, source-specific typed columns) ──
+        // The aws.source field identifies the Wazuh integration sub-type.
+        let aws_source = aws_str!(aws, "source");
+        match aws_source {
+
+            // ── GuardDuty / Inspector / Macie ─────────────────────────────────────────
+            // These are finding-type sources: severity comes from the finding metadata,
+            // not from the Wazuh rule level.
+            "guardduty" | "inspector" | "macie" => {
+                // rule_name from finding title
+                if rule_name.is_empty() {
+                    let v = aws_str!(aws, "title");
+                    if !v.is_empty() { rule_name = v.to_string(); }
+                }
+                // app_category from finding type
+                if app_category.is_empty() {
+                    let v = aws_str!(aws, "type");
+                    if !v.is_empty() { app_category = v.to_string(); }
+                }
+                // domain from accountId (GuardDuty/Macie use camelCase; differs from aws_account_id)
+                if domain.is_empty() {
+                    let v = aws_str!(aws, "accountId");
+                    if !v.is_empty() { domain = v.to_string(); }
+                }
+
+                // GuardDuty: actionType from service.action sub-object
+                if action.is_empty() {
+                    if let Some(svc) = aws.get("service").and_then(Value::as_object) {
+                        if let Some(act_obj) = svc.get("action").and_then(Value::as_object) {
+                            let v = act_obj.get("actionType").and_then(Value::as_str).unwrap_or("");
+                            if !v.is_empty() { action = v.to_string(); }
+                        }
+                    }
+                }
+
+                // Severity override ─ GuardDuty uses a 0.0–9.9 float;
+                // Inspector / Macie use strings (High/Medium/Low/Informational).
+                if aws_source == "guardduty" {
+                    let gd_sev_str = aws_str!(aws, "severity");
+                    if !gd_sev_str.is_empty() {
+                        let gd: f32 = gd_sev_str.parse().unwrap_or(0.0);
+                        let (vid, vlabel) = match (gd * 10.0) as u32 {
+                            80..=u32::MAX  => (5u8, "Critical"),
+                            70..=79        => (4u8, "High"),
+                            40..=69        => (3u8, "Medium"),
+                            10..=39        => (2u8, "Low"),
+                            _              => (1u8, "Informational"),
+                        };
+                        sev_id    = vid;
+                        sev_label = vlabel.to_string();
+                    }
+                } else {
+                    // Inspector / Macie severity as string label (from aws.severity or aws.severity.description)
+                    let sev_raw = if let Some(sev_obj) = aws.get("severity").and_then(Value::as_object) {
+                        sev_obj.get("description").and_then(Value::as_str).unwrap_or("").to_string()
+                    } else {
+                        aws_str!(aws, "severity").to_string()
+                    };
+                    if !sev_raw.is_empty() {
+                        let (vid, vlabel) = match sev_raw.to_ascii_lowercase().as_str() {
+                            "critical"                         => (5u8, "Critical"),
+                            "high"                             => (4u8, "High"),
+                            "medium" | "moderate"              => (3u8, "Medium"),
+                            "low"                              => (2u8, "Low"),
+                            "informational" | "info" | "none"  => (1u8, "Informational"),
+                            _                                  => (sev_id, sev_label.as_str()),
+                        };
+                        sev_id    = vid;
+                        sev_label = vlabel.to_string();
+                    }
+                }
+
+                // Inspector hostname from assetAttributes (already in SRC_HOSTNAME paths,
+                // but direct extraction is more reliable for the nested object)
+                if src_hostname.is_empty() {
+                    if let Some(aa) = aws.get("assetAttributes").and_then(Value::as_object) {
+                        let v = aa.get("hostname").and_then(Value::as_str).unwrap_or("");
+                        if !v.is_empty() { src_hostname = v.to_string(); }
+                    }
+                }
+
+                // Finding identity extensions
+                aws_ext!("arn",          "aws_finding_arn");
+                aws_ext!("id",           "aws_finding_id");
+                aws_ext!("description",  "aws_description");
+                aws_ext!("region",       "aws_region_src");
+                aws_ext!("createdAt",    "aws_created_at");
+                aws_ext!("updatedAt",    "aws_updated_at");
+            },
+
+            // ── VPC Flow Logs ──────────────────────────────────────────────────────────
+            // IP/port/protocol/action/bytes are already covered by field_paths entries
+            // (aws.srcaddr, aws.dstaddr, aws.srcport, aws.dstport, aws.protocol,
+            //  aws.action, aws.bytes).  Only extensions need explicit handling here.
+            "vpc" => {
+                // network_protocol: VPC encodes protocol as an IANA number string (6=TCP, 17=UDP, …)
+                // or as a name; convert common numbers to names for readability.
+                if !network_protocol.is_empty() {
+                    let proto_norm = match network_protocol.trim() {
+                        "6"   => "tcp",
+                        "17"  => "udp",
+                        "1"   => "icmp",
+                        "58"  => "icmpv6",
+                        "47"  => "gre",
+                        "50"  => "esp",
+                        other => other,
+                    };
+                    network_protocol = proto_norm.to_string();
+                }
+                // Extensions
+                aws_ext!("interface_id", "aws_interface_id");
+                aws_ext!("account_id",   "aws_flow_account_id");   // VPC uses underscored account_id
+                aws_ext!("log_status",   "aws_log_status");
+                aws_ext!("packets",      "aws_packets");
+                aws_ext!("version",      "aws_flow_version");
+            },
+
+            // ── AWS WAF ────────────────────────────────────────────────────────────────
+            "waf" => {
+                // rule_name from terminatingRuleId
+                if rule_name.is_empty() {
+                    let v = aws_str!(aws, "terminatingRuleId");
+                    if !v.is_empty() { rule_name = v.to_string(); }
+                }
+                // Extensions
+                aws_ext!("webaclId",          "aws_waf_acl_id");
+                aws_ext!("terminatingRuleId",  "aws_waf_rule_id");
+                aws_ext!("terminatingRuleType","aws_waf_rule_type");
+            },
+
+            // ── AWS ALB (Application Load Balancer) ────────────────────────────────────
+            "alb" => {
+                // action_executed is ALB's way of reporting the routing decision
+                if action.is_empty() {
+                    let v = aws_str!(aws, "action_executed");
+                    if !v.is_empty() { action = v.to_string(); }
+                }
+                // Extensions
+                aws_ext!("error_reason",  "aws_alb_error_reason");
+                aws_ext!("elb",           "aws_alb_name");
+                aws_ext!("user_agent",    "aws_user_agent");
+                aws_ext!("target_port",   "aws_alb_target_port");
+                aws_ext!("target_status_code", "aws_alb_target_status");
+            },
+
+            // ── AWS S3 Server Access Logs ──────────────────────────────────────────────
+            "s3_server_access" => {
+                // domain = S3 bucket name
+                if domain.is_empty() {
+                    let v = aws_str!(aws, "bucket");
+                    if !v.is_empty() { domain = v.to_string(); }
+                }
+                // status = Failure when an error_code is present (non-empty, non-dash)
+                {
+                    let v = aws_str!(aws, "error_code");
+                    if !v.is_empty() && v != "-" {
+                        if status.is_empty() { status = "Failure".to_string(); }
+                        extensions.insert("aws_s3_error_code".into(), Value::String(v.to_string()));
+                    }
+                }
+                // Extensions
+                aws_ext!("user_agent",        "aws_user_agent");
+                aws_ext!("key",               "aws_s3_key");
+                aws_ext!("bytes_sent",        "aws_s3_bytes_sent");
+                aws_ext!("object_size",       "aws_s3_object_size");
+                aws_ext!("total_time",        "aws_s3_total_time_ms");
+                aws_ext!("turn_around_time",  "aws_s3_turnaround_ms");
+                aws_ext!("referrer",          "aws_s3_referrer");
+            },
+
+            // ── AWS Config ─────────────────────────────────────────────────────────────
+            "config" => {
+                // domain = awsAccountId (Config uses camelCase, different from CloudTrail aws_account_id)
+                if domain.is_empty() {
+                    let v = aws_str!(aws, "awsAccountId");
+                    if !v.is_empty() { domain = v.to_string(); }
+                }
+                // rule_name = resourceId (the specific resource being audited)
+                if rule_name.is_empty() {
+                    let v = aws_str!(aws, "resourceId");
+                    if !v.is_empty() { rule_name = v.to_string(); }
+                }
+                // Extensions
+                aws_ext!("resourceName",                 "aws_resource_name");
+                aws_ext!("configurationItemCaptureTime", "aws_config_capture_time");
+                aws_ext!("configuration.complianceType", "aws_compliance_type");
+                {
+                    let v = aws_str!(aws, "configuration.configRuleList.configRuleName");
+                    if !v.is_empty() { extensions.insert("aws_config_rule_name".into(), Value::String(v.to_string())); }
+                }
+            },
+
+            // ── AWS Trusted Advisor ────────────────────────────────────────────────────
+            "trustedadvisor" => {
+                aws_ext!("uuid",         "aws_trusted_advisor_uuid");
+                aws_ext!("category",     "aws_trusted_advisor_category");
+                // status and rule_name already covered by STATUS/RULE_NAME field_paths
+                // (aws.status, aws.check-name)
+            },
+
+            // ── AWS Inspector v2 (Security Hub-based) ────────────────────────────────
+            "inspector2" => {
+                aws_ext!("packageVulnerabilityDetails.vulnerabilityId", "aws_v2_cve_id");
+                aws_ext!("severity.label",                               "aws_v2_severity_label");
+                aws_ext!("type",                                         "aws_v2_finding_type");
+            },
+
+            // ── AWS Security Hub findings ──────────────────────────────────────────────
+            "securityhub" => {
+                if rule_name.is_empty() {
+                    let v = aws_str!(aws, "Title");
+                    if !v.is_empty() { rule_name = v.to_string(); }
+                }
+                if app_category.is_empty() {
+                    let v = aws_str!(aws, "Type");
+                    if !v.is_empty() { app_category = v.to_string(); }
+                }
+                // Severity label (CRITICAL/HIGH/MEDIUM/LOW/INFORMATIONAL)
+                {
+                    let sev_raw = if let Some(sev_obj) = aws.get("Severity").and_then(Value::as_object) {
+                        sev_obj.get("Label").and_then(Value::as_str).unwrap_or("").to_string()
+                    } else {
+                        String::new()
+                    };
+                    if !sev_raw.is_empty() {
+                        let (vid, vlabel) = match sev_raw.to_ascii_lowercase().as_str() {
+                            "critical"      => (5u8, "Critical"),
+                            "high"          => (4u8, "High"),
+                            "medium"        => (3u8, "Medium"),
+                            "low"           => (2u8, "Low"),
+                            "informational" => (1u8, "Informational"),
+                            _               => (sev_id, sev_label.as_str()),
+                        };
+                        sev_id    = vid;
+                        sev_label = vlabel.to_string();
+                    }
+                }
+                aws_ext!("Id",               "aws_sh_finding_id");
+                aws_ext!("ProductArn",        "aws_sh_product_arn");
+                aws_ext!("GeneratorId",       "aws_sh_generator_id");
+                aws_ext!("Description",       "aws_description");
+                aws_ext!("RecordState",       "aws_sh_record_state");
+                aws_ext!("WorkflowStatus",    "aws_sh_workflow_status");
+            },
+
+            // ── AWS KMS (mostly handled already via CloudTrail block above) ────────────
+            // All KMS events are CloudTrail records; aws.source = "kms" is set by Wazuh
+            // rules but the data structure is identical to cloudtrail.  Nothing extra needed.
+            "kms" => {},
+
+            _ => {},
+        }
+    }
+
+    // ── Office 365 Unified Audit Log (data.office365.*) ──────────────────
+    // Natively extracted — no field_mappings.toml entry required.
+    // Covers events forwarded via Wazuh's office365 decoder
+    // (integration = "office365", workloads: SharePoint, Exchange, Teams, AAD, …).
+    if let Some(o365) = data_val.get("office365").and_then(Value::as_object) {
+        macro_rules! o365_str {
+            ($key:expr) => {
+                o365.get($key).and_then(Value::as_str).unwrap_or("")
+            };
+        }
+        macro_rules! o365_ext {
+            ($key:expr, $ext:expr) => {
+                let _v = o365_str!($key);
+                if !_v.is_empty() { extensions.insert($ext.into(), Value::String(_v.to_string())); }
+            };
+        }
+
+        // src_ip: ClientIPAddress (capital 'A' variant not covered by field_paths SRC_IP)
+        if src_ip.is_empty() {
+            let v = o365_str!("ClientIPAddress");
+            if !v.is_empty() { src_ip = v.to_string(); }
+        }
+
+        // actor_user: Actor array entry with Type=5 holds the UPN (user principal name)
+        if actor_user.is_empty() {
+            if let Some(actors) = o365.get("Actor").and_then(Value::as_array) {
+                for item in actors {
+                    if item.get("Type").and_then(Value::as_str) == Some("5") {
+                        if let Some(id) = item.get("ID").and_then(Value::as_str) {
+                            if !id.is_empty() { actor_user = id.to_string(); break; }
+                        }
+                    }
+                }
+            }
+        }
+
+        // app_name: Workload → ApplicationDisplayName → AppAccessContext.ClientAppName
+        if app_name.is_empty() {
+            let v = o365_str!("Workload");
+            if !v.is_empty() { app_name = v.to_string(); }
+        }
+        if app_name.is_empty() {
+            let v = o365_str!("ApplicationDisplayName");
+            if !v.is_empty() { app_name = v.to_string(); }
+        }
+        if app_name.is_empty() {
+            if let Some(aac) = o365.get("AppAccessContext").and_then(Value::as_object) {
+                let v = aac.get("ClientAppName").and_then(Value::as_str).unwrap_or("");
+                if !v.is_empty() { app_name = v.to_string(); }
+            }
+        }
+
+        // domain: OrganizationId (AAD tenant GUID)
+        if domain.is_empty() {
+            let v = o365_str!("OrganizationId");
+            if !v.is_empty() { domain = v.to_string(); }
+        }
+
+        // action: Operation (UserLoggedIn, FileUploaded, SendMessage, SetMailboxPermission, …)
+        if action.is_empty() {
+            let v = o365_str!("Operation");
+            if !v.is_empty() { action = v.to_string(); }
+        }
+
+        // status: ResultStatus (Succeeded / Failed / PartiallySucceeded / True / False)
+        if status.is_empty() {
+            let v = o365_str!("ResultStatus");
+            if !v.is_empty() { status = v.to_string(); }
+        }
+
+        // Extension metadata — identifiers, session, app context
+        o365_ext!("AadAppId",               "o365_aad_app_id");
+        o365_ext!("ActorAppId",             "o365_actor_app_id");
+        o365_ext!("ActorContextId",         "o365_actor_context_id");
+        o365_ext!("ActorInfoString",        "o365_actor_info");
+        o365_ext!("AddOnGuid",              "o365_addon_guid");
+        o365_ext!("AppId",                  "o365_app_id");
+        o365_ext!("AppIdentity",            "o365_app_identity");
+        o365_ext!("ApplicationId",          "o365_application_id");
+        o365_ext!("AssertingApplicationId", "o365_asserting_app_id");
+        o365_ext!("AuthType",               "o365_auth_type");
+        o365_ext!("AuthenticationType",     "o365_authentication_type");
+        o365_ext!("AzureActiveDirectoryEventType", "o365_aad_event_type");
+        o365_ext!("BrowserName",            "browser_name");
+        o365_ext!("BrowserVersion",         "browser_version");
+        o365_ext!("CallId",                 "o365_call_id");
+        o365_ext!("ChatName",               "o365_chat_name");
+        o365_ext!("ChatThreadId",           "o365_chat_thread_id");
+        o365_ext!("ClientAppId",            "o365_client_app_id");
+        o365_ext!("ClientApplication",      "o365_client_application");
+        o365_ext!("ClientInfoString",       "o365_client_info");
+        o365_ext!("ClientRegion",           "o365_client_region");
+        o365_ext!("ClientRequestId",        "o365_client_request_id");
+        o365_ext!("UserType",               "o365_user_type");
+        o365_ext!("RecordType",             "o365_record_type");
+        o365_ext!("AgentId",                "o365_agent_id");
+        o365_ext!("AgentName",              "o365_agent_name");
+
+        // AppAccessContext sub-object — OAuth session / token metadata
+        if let Some(aac) = o365.get("AppAccessContext").and_then(Value::as_object) {
+            macro_rules! aac_ext {
+                ($key:expr, $ext:expr) => {
+                    let _v = aac.get($key).and_then(Value::as_str).unwrap_or("");
+                    if !_v.is_empty() { extensions.insert($ext.into(), Value::String(_v.to_string())); }
+                };
+            }
+            aac_ext!("AADSessionId",   "o365_aad_session_id");
+            aac_ext!("CorrelationId",  "o365_correlation_id");
+            aac_ext!("UniqueTokenId",  "o365_token_id");
+            aac_ext!("UserObjectId",   "o365_user_object_id");
+            aac_ext!("DeviceId",       "o365_device_id");
+            aac_ext!("ClientAppId",    "o365_aac_client_app_id");
+            aac_ext!("ClientAppName",  "o365_aac_client_app_name");
+        }
+    }
+
+    // ── GCP Cloud Logging (data.gcp.*) ───────────────────────────────────
+    // Covers: Audit logs (protoPayload), DNS (jsonPayload), Security Command Center.
+    // Severity from gcp.severity overrides the Wazuh rule level — GCP has its own
+    // scale: DEBUG < INFO < NOTICE < WARNING < ERROR < CRITICAL < ALERT < EMERGENCY.
+    if let Some(gcp) = data_val.get("gcp").and_then(Value::as_object) {
+        macro_rules! gcp_str { ($k:expr) => { gcp.get($k).and_then(Value::as_str).unwrap_or("") }; }
+        macro_rules! gcp_ext {
+            ($k:expr, $ext:expr) => {
+                let _v = gcp_str!($k);
+                if !_v.is_empty() { extensions.insert($ext.into(), Value::String(_v.to_string())); }
+            };
+        }
+
+        // Severity override — GCP severity is more precise than Wazuh rule level.
+        let gcp_sev = gcp_str!("severity");
+        if !gcp_sev.is_empty() {
+            let (vid, vlabel) = match gcp_sev.to_ascii_uppercase().as_str() {
+                "EMERGENCY" | "ALERT"  => (5u8, "Critical"),
+                "CRITICAL"             => (5u8, "Critical"),
+                "ERROR"                => (4u8, "High"),
+                "WARNING"              => (3u8, "Medium"),
+                "NOTICE"               => (2u8, "Low"),
+                "INFO" | "DEBUG"       => (1u8, "Informational"),
+                _                      => (sev_id, sev_label.as_str()),
+            };
+            sev_id    = vid;
+            sev_label = vlabel.to_string();
+        }
+
+        // Typed columns from protoPayload (Audit logs)
+        if let Some(pp) = gcp.get("protoPayload").and_then(Value::as_object) {
+            if actor_user.is_empty() {
+                let v = pp.get("authenticationInfo")
+                    .and_then(Value::as_object)
+                    .and_then(|a| a.get("principalEmail"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                if !v.is_empty() { actor_user = v.to_string(); }
+            }
+            if src_ip.is_empty() {
+                let v = pp.get("requestMetadata")
+                    .and_then(Value::as_object)
+                    .and_then(|rm| rm.get("callerIp"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                if !v.is_empty() { src_ip = v.to_string(); }
+            }
+            if action.is_empty() {
+                let v = pp.get("methodName").and_then(Value::as_str).unwrap_or("");
+                if !v.is_empty() { action = v.to_string(); }
+            }
+            if url.is_empty() {
+                let v = pp.get("resourceName").and_then(Value::as_str).unwrap_or("");
+                if !v.is_empty() { url = v.to_string(); }
+            }
+        }
+
+        // Typed columns from jsonPayload (DNS, VPC Flow, Cloud Armor, etc.)
+        if let Some(jp) = gcp.get("jsonPayload").and_then(Value::as_object) {
+            if src_ip.is_empty() {
+                let v = jp.get("sourceIP").and_then(Value::as_str).unwrap_or("");
+                if !v.is_empty() { src_ip = v.to_string(); }
+            }
+        }
+
+        // resource.labels.project_id → domain (GCP project = organizational boundary)
+        if domain.is_empty() {
+            if let Some(rl) = gcp.get("resource")
+                .and_then(Value::as_object)
+                .and_then(|r| r.get("labels"))
+                .and_then(Value::as_object)
+            {
+                let v = rl.get("project_id").and_then(Value::as_str).unwrap_or("");
+                if !v.is_empty() { domain = v.to_string(); }
+            }
+        }
+
+        // Extensions
+        gcp_ext!("s_request_id",  "gcp_request_id");
+        gcp_ext!("insertId",      "gcp_insert_id");
+        gcp_ext!("logName",       "gcp_log_name");
+    }
+
+    // ── Docker Integration (data.docker.*) ───────────────────────────────
+    // Wazuh docker decoder produces docker.Action, docker.Type, docker.status,
+    // docker.level, and docker.Actor.* from Docker daemon events.
+    if let Some(docker) = data_val.get("docker").and_then(Value::as_object) {
+        macro_rules! dk_str { ($k:expr) => { docker.get($k).and_then(Value::as_str).unwrap_or("") }; }
+
+        // docker.level (info/warning/error) → severity override
+        let dk_level = dk_str!("level");
+        if !dk_level.is_empty() {
+            let (vid, vlabel) = match dk_level.to_ascii_lowercase().as_str() {
+                "error"   => (4u8, "High"),
+                "warning" | "warn" => (3u8, "Medium"),
+                _         => (1u8, "Informational"),
+            };
+            if sev_id < vid { sev_id = vid; sev_label = vlabel.to_string(); }
+        }
+
+        // docker.Action → action (create/start/stop/destroy/exec_start/…)
+        if action.is_empty() {
+            let v = dk_str!("Action");
+            if !v.is_empty() { action = v.to_string(); }
+        }
+
+        // docker.Type → app_category (container/network/volume/plugin/secret)
+        if app_category.is_empty() {
+            let v = dk_str!("Type");
+            if !v.is_empty() { app_category = v.to_string(); }
+        }
+
+        // docker.Actor.Attributes.name → app_name (container name)
+        if app_name.is_empty() {
+            if let Some(actor) = docker.get("Actor").and_then(Value::as_object) {
+                let v = actor.get("Attributes")
+                    .and_then(Value::as_object)
+                    .and_then(|a| a.get("name"))
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                if !v.is_empty() { app_name = v.to_string(); }
+            }
+        }
+
+        // Role-change extensions (docker.Actor.Attributes.role.new / role.old)
+        if let Some(attr) = docker.get("Actor")
+            .and_then(Value::as_object)
+            .and_then(|a| a.get("Attributes"))
+            .and_then(Value::as_object)
+        {
+            if let Some(v) = attr.get("role.new").and_then(Value::as_str) {
+                if !v.is_empty() { extensions.insert("docker_role_new".into(), Value::String(v.to_string())); }
+            }
+            if let Some(v) = attr.get("role.old").and_then(Value::as_str) {
+                if !v.is_empty() { extensions.insert("docker_role_old".into(), Value::String(v.to_string())); }
+            }
+            if let Some(v) = attr.get("image").and_then(Value::as_str) {
+                if !v.is_empty() { extensions.insert("docker_image".into(), Value::String(v.to_string())); }
+            }
+        }
+    }
+
+    // ── MS Graph Security (data.ms-graph.*) ──────────────────────────────
+    // Microsoft 365 Defender / Sentinel alerts forwarded via Wazuh ms-graph integration.
+    if let Some(msg) = data_val.get("ms-graph").and_then(Value::as_object) {
+        macro_rules! msg_str { ($k:expr) => { msg.get($k).and_then(Value::as_str).unwrap_or("") }; }
+        macro_rules! msg_ext {
+            ($k:expr, $ext:expr) => {
+                let _v = msg_str!($k);
+                if !_v.is_empty() { extensions.insert($ext.into(), Value::String(_v.to_string())); }
+            };
+        }
+
+        // Severity override — MS Graph uses string labels
+        {
+            let ms_sev = msg_str!("severity");
+            if !ms_sev.is_empty() {
+                let (vid, vlabel) = match ms_sev.to_ascii_lowercase().as_str() {
+                    "high"          => (4u8, "High"),
+                    "medium"        => (3u8, "Medium"),
+                    "low"           => (2u8, "Low"),
+                    "informational" => (1u8, "Informational"),
+                    _               => (sev_id, sev_label.as_str()),
+                };
+                sev_id    = vid;
+                sev_label = vlabel.to_string();
+            }
+        }
+
+        // Typed column fills
+        if rule_name.is_empty() {
+            let v = msg_str!("title");
+            if !v.is_empty() { rule_name = v.to_string(); }
+        }
+        if app_category.is_empty() {
+            let v = msg_str!("category");
+            if !v.is_empty() { app_category = v.to_string(); }
+        }
+        if status.is_empty() {
+            let v = msg_str!("status");
+            if !v.is_empty() { status = v.to_string(); }
+        }
+        if app_name.is_empty() {
+            // Take whichever is non-empty: detectionSource > serviceSource
+            let v = msg_str!("detectionSource");
+            let v = if v.is_empty() { msg_str!("serviceSource") } else { v };
+            if !v.is_empty() { app_name = v.to_string(); }
+        }
+        if dst_hostname.is_empty() {
+            let v = msg_str!("resource");
+            if !v.is_empty() { dst_hostname = v.to_string(); }
+        }
+
+        // Extensions
+        msg_ext!("id",              "ms_graph_alert_id");
+        msg_ext!("incidentId",      "ms_graph_incident_id");
+        msg_ext!("classification",  "ms_graph_classification");
+        msg_ext!("determination",   "ms_graph_determination");
+        msg_ext!("relationship",    "ms_graph_relationship");
+        msg_ext!("detectionSource", "ms_graph_detection_source");
+        msg_ext!("serviceSource",   "ms_graph_service_source");
+        msg_ext!("tenantId",        "ms_graph_tenant_id");
+    }
+
     if !custom.field_map.is_empty() {
         for (wazuh_field, ocsf_target) in &custom.field_map {
             let val = get_data_field(&data_val, wazuh_field.as_str());
